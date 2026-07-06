@@ -73,6 +73,20 @@ export default function CashierDashboard({ user, onLogout, onNavigateToAnalytics
   const [quantity, setQuantity] = useState<number>(1);
   const [paymentMode, setPaymentMode] = useState<PaymentMode | undefined>(undefined);
 
+  // Cart / Multi-Pizza selections for cashier desk
+  const [cashierCartItems, setCashierCartItems] = useState<Array<{
+    baseId: string;
+    baseName: string;
+    basePrice: number;
+    typeId: string;
+    pizzaName: string;
+    pizzaPrice: number;
+    toppingId: string;
+    toppingName: string;
+    toppingPrice: number;
+    quantity: number;
+  }>>([]);
+
   // States
   const [errors, setErrors] = useState<ValidationError>({});
   const [nlInput, setNlInput] = useState('');
@@ -277,25 +291,47 @@ export default function CashierDashboard({ user, onLogout, onNavigateToAnalytics
     }
   }, [mapSelectedCategory, bases, pizzas, toppings]);
 
+  const isCartEmpty = cashierCartItems.length === 0;
+
+  const totalQuantity = isCartEmpty
+    ? quantity
+    : cashierCartItems.reduce((sum, item) => sum + item.quantity, 0);
+
   // Validate fields on change
   useEffect(() => {
     const res = validatePizzaOrder({
       customerName,
       customerPhone,
-      quantity,
+      quantity: totalQuantity,
       paymentMode,
     });
     setErrors(res.errors);
-  }, [customerName, customerPhone, quantity, paymentMode]);
+  }, [customerName, customerPhone, totalQuantity, paymentMode]);
 
   // Current selected item details
   const currentBase = bases.find(b => b.id === selectedBase) || bases[0];
   const currentType = pizzas.find(t => t.id === selectedType) || pizzas[0];
   const currentTopping = toppings.find(p => p.id === selectedTopping) || toppings[0];
 
-  const financials = currentBase && currentType && currentTopping
-    ? calculateFinancials(quantity, currentBase.price, currentType.price, currentTopping.price)
-    : { unitPrice: 0, subtotal: 0, discount: 0, postDiscountTotal: 0, gst: 0, finalTotal: 0, hasDiscount: false };
+  const totalSubtotal = isCartEmpty
+    ? (currentBase && currentType && currentTopping ? (currentBase.price + currentType.price + currentTopping.price) * quantity : 0)
+    : cashierCartItems.reduce((sum, item) => sum + ((item.basePrice + item.pizzaPrice + item.toppingPrice) * item.quantity), 0);
+
+  const hasDiscount = totalQuantity >= 5;
+  const discountAmount = hasDiscount ? totalSubtotal * 0.10 : 0;
+  const postDiscountTotal = totalSubtotal - discountAmount;
+  const gstAmount = postDiscountTotal * 0.18;
+  const finalTotalAmount = postDiscountTotal + gstAmount;
+
+  const financials = {
+    unitPrice: isCartEmpty ? (currentBase && currentType && currentTopping ? currentBase.price + currentType.price + currentTopping.price : 0) : 0,
+    subtotal: totalSubtotal,
+    discount: discountAmount,
+    postDiscountTotal,
+    gst: gstAmount,
+    finalTotal: finalTotalAmount,
+    hasDiscount,
+  };
 
   // AI Order Parser
   const handleAiParse = async () => {
@@ -385,10 +421,10 @@ export default function CashierDashboard({ user, onLogout, onNavigateToAnalytics
     const inputData = {
       customerName,
       customerPhone,
-      baseId: selectedBase,
-      typeId: selectedType,
-      toppingId: selectedTopping,
-      quantity,
+      baseId: isCartEmpty ? selectedBase : cashierCartItems[0].baseId,
+      typeId: isCartEmpty ? selectedType : cashierCartItems[0].typeId,
+      toppingId: isCartEmpty ? selectedTopping : cashierCartItems[0].toppingId,
+      quantity: totalQuantity,
       paymentMode,
     };
 
@@ -422,19 +458,20 @@ export default function CashierDashboard({ user, onLogout, onNavigateToAnalytics
     const inputData = {
       customerName,
       customerPhone,
-      baseId: selectedBase,
-      typeId: selectedType,
-      toppingId: selectedTopping,
-      quantity,
+      baseId: isCartEmpty ? selectedBase : cashierCartItems[0].baseId,
+      typeId: isCartEmpty ? selectedType : cashierCartItems[0].typeId,
+      toppingId: isCartEmpty ? selectedTopping : cashierCartItems[0].toppingId,
+      quantity: totalQuantity,
       paymentMode,
       orderSource: 'Counter',
+      items: isCartEmpty ? undefined : cashierCartItems,
     };
 
     try {
       const pizzaDetails = {
-        baseName: currentBase.name,
-        pizzaName: currentType.name,
-        toppingName: currentTopping.name,
+        baseName: isCartEmpty ? currentBase.name : cashierCartItems[0].baseName,
+        pizzaName: isCartEmpty ? currentType.name : cashierCartItems[0].pizzaName,
+        toppingName: isCartEmpty ? currentTopping.name : cashierCartItems[0].toppingName,
       };
 
       const result = await submitOrder(inputData, financials, pizzaDetails);
@@ -448,18 +485,19 @@ export default function CashierDashboard({ user, onLogout, onNavigateToAnalytics
           timestamp,
           customerName: customerName.trim(),
           customerPhone: customerPhone.trim(),
-          pizzaName: currentType.name,
-          baseName: currentBase.name,
-          toppingName: currentTopping.name,
-          pizzaPrice: currentType.price,
-          basePrice: currentBase.price,
-          toppingPrice: currentTopping.price,
-          quantity,
+          pizzaName: isCartEmpty ? currentType.name : cashierCartItems[0].pizzaName,
+          baseName: isCartEmpty ? currentBase.name : cashierCartItems[0].baseName,
+          toppingName: isCartEmpty ? currentTopping.name : cashierCartItems[0].toppingName,
+          pizzaPrice: isCartEmpty ? currentType.price : cashierCartItems[0].pizzaPrice,
+          basePrice: isCartEmpty ? currentBase.price : cashierCartItems[0].basePrice,
+          toppingPrice: isCartEmpty ? currentTopping.price : cashierCartItems[0].toppingPrice,
+          quantity: totalQuantity,
           subtotal: financials.subtotal,
           discount: financials.discount,
           gst: financials.gst,
           finalTotal: financials.finalTotal,
           paymentMode,
+          items: isCartEmpty ? undefined : cashierCartItems,
         });
 
         // Clear forms
@@ -467,6 +505,7 @@ export default function CashierDashboard({ user, onLogout, onNavigateToAnalytics
         setCustomerPhone('');
         setQuantity(1);
         setPaymentMode(undefined);
+        setCashierCartItems([]);
         setAiResult(null);
 
         // Reload lists
@@ -1367,6 +1406,56 @@ export default function CashierDashboard({ user, onLogout, onNavigateToAnalytics
                       </p>
                     )}
                   </div>
+
+                  {/* Add customized pizza to order */}
+                  <div className="sm:col-span-2 pt-3 border-t border-dashed border-slate-100 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const base = bases.find(b => b.id === selectedBase) || bases[0];
+                        const type = pizzas.find(t => t.id === selectedType) || pizzas[0];
+                        const topping = toppings.find(p => p.id === selectedTopping) || toppings[0];
+                        if (!base || !type || !topping) return;
+
+                        const existingIdx = cashierCartItems.findIndex(item => 
+                          item.baseId === selectedBase && 
+                          item.typeId === selectedType && 
+                          item.toppingId === selectedTopping
+                        );
+
+                        if (existingIdx > -1) {
+                          const updated = [...cashierCartItems];
+                          const nextQty = updated[existingIdx].quantity + quantity;
+                          if (nextQty > 10) {
+                            setSubmitAlert({ type: 'error', message: 'Maximum 10 pizzas per customization allowed.' });
+                            return;
+                          }
+                          updated[existingIdx].quantity = nextQty;
+                          setCashierCartItems(updated);
+                        } else {
+                          setCashierCartItems([...cashierCartItems, {
+                            baseId: selectedBase,
+                            baseName: base.name,
+                            basePrice: base.price,
+                            typeId: selectedType,
+                            pizzaName: type.name,
+                            pizzaPrice: type.price,
+                            toppingId: selectedTopping,
+                            toppingName: topping.name,
+                            toppingPrice: topping.price,
+                            quantity
+                          }]);
+                        }
+                        setQuantity(1);
+                        setSubmitAlert({ type: 'success', message: `${type.name} added to cart.` });
+                        setTimeout(() => setSubmitAlert(null), 3000);
+                      }}
+                      className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold py-2 px-4 rounded-xl text-xs transition flex items-center gap-1.5 cursor-pointer shadow-sm"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      <span>Add Pizza to Order</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1385,30 +1474,66 @@ export default function CashierDashboard({ user, onLogout, onNavigateToAnalytics
               </div>
 
               <div className="p-5 space-y-3.5 text-xs">
-                <div className="border-b border-slate-100 pb-2.5">
-                  <p className="text-xs text-slate-400 font-mono font-bold uppercase">Item Description</p>
-                  <p className="font-semibold text-slate-800 text-sm mt-1">{currentType?.name}</p>
-                  <p className="text-slate-500 text-[11px] mt-0.5">Crust: {currentBase?.name} | Topping: {currentTopping?.name}</p>
-                </div>
+                {isCartEmpty ? (
+                  <>
+                    <div className="border-b border-slate-100 pb-2.5">
+                      <p className="text-xs text-slate-400 font-mono font-bold uppercase">Item Description (Preview)</p>
+                      <p className="font-semibold text-slate-800 text-sm mt-1">{currentType?.name}</p>
+                      <p className="text-slate-500 text-[11px] mt-0.5">Crust: {currentBase?.name} | Topping: {currentTopping?.name}</p>
+                    </div>
 
-                <div className="flex justify-between text-slate-500">
-                  <span>Base Price</span>
-                  <span>₹{(currentBase?.price || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between text-slate-500">
-                  <span>Flavor Price</span>
-                  <span>₹{(currentType?.price || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between text-slate-500">
-                  <span>Premium Topping</span>
-                  <span>+₹{(currentTopping?.price || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between font-bold text-slate-700 border-t border-slate-100 pt-2 font-mono text-[11px]">
-                  <span>Unit Cost</span>
-                  <span>₹{financials.unitPrice.toFixed(2)}</span>
-                </div>
+                    <div className="flex justify-between text-slate-500">
+                      <span>Base Price</span>
+                      <span>₹{(currentBase?.price || 0).toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-500">
+                      <span>Flavor Price</span>
+                      <span>₹{(currentType?.price || 0).toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-500">
+                      <span>Premium Topping</span>
+                      <span>+₹{(currentTopping?.price || 0).toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between font-bold text-slate-700 border-t border-slate-100 pt-2 font-mono text-[11px]">
+                      <span>Unit Cost</span>
+                      <span>₹{financials.unitPrice.toFixed(2)}</span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="space-y-3 max-h-60 overflow-y-auto border-b border-slate-100 pb-3 pr-1">
+                    <p className="text-xs text-slate-400 font-mono font-bold uppercase">Order Items</p>
+                    {cashierCartItems.map((item, idx) => {
+                      const itemUnitPrice = item.basePrice + item.pizzaPrice + item.toppingPrice;
+                      return (
+                        <div key={idx} className="flex justify-between items-start gap-2 py-1.5 border-b border-slate-50 last:border-0">
+                          <div className="flex-1">
+                            <span className="font-semibold text-slate-800 text-xs block">{item.pizzaName}</span>
+                            <span className="text-[10px] text-slate-400 block">
+                              {item.baseName} {item.toppingId !== 'none' ? `+ ${item.toppingName}` : ''}
+                            </span>
+                            <span className="text-[10px] text-amber-600 block">₹{itemUnitPrice.toFixed(2)} each</span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <span className="text-xs font-bold text-slate-700 font-mono bg-slate-100 px-1.5 py-0.5 rounded">{item.quantity}x</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const updated = cashierCartItems.filter((_, i) => i !== idx);
+                                setCashierCartItems(updated);
+                              }}
+                              className="text-slate-400 hover:text-rose-600 transition p-1"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
                 <div className="flex justify-between font-bold text-slate-700 pt-2 border-t border-slate-100">
-                  <span>Subtotal ({quantity}x)</span>
+                  <span>Subtotal ({totalQuantity}x)</span>
                   <span>₹{financials.subtotal.toFixed(2)}</span>
                 </div>
 
@@ -1492,18 +1617,35 @@ export default function CashierDashboard({ user, onLogout, onNavigateToAnalytics
               <span>PHONE</span>
               <span>{latestOrder.customerPhone}</span>
             </div>
-            <div className="flex justify-between">
-              <span>PIZZA STYLE</span>
-              <span className="font-semibold text-slate-800">{latestOrder.pizzaName}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>CRUST BASE</span>
-              <span className="text-slate-800">{latestOrder.baseName}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>TOPPING</span>
-              <span>{latestOrder.toppingName}</span>
-            </div>
+            {latestOrder.items && latestOrder.items.length > 0 ? (
+              <div className="border-y border-dashed border-slate-200 py-3 my-2 space-y-2">
+                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Ordered Items</span>
+                {latestOrder.items.map((item: any, idx: number) => (
+                  <div key={idx} className="flex justify-between text-[11px] leading-tight text-slate-700">
+                    <div>
+                      <span className="font-semibold">{item.pizzaName}</span>
+                      <span className="text-[10px] text-slate-400 block">{item.baseName} {item.toppingId !== 'none' ? `+ ${item.toppingName}` : ''}</span>
+                    </div>
+                    <span className="font-bold font-mono">{item.quantity}x</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <>
+                <div className="flex justify-between">
+                  <span>PIZZA STYLE</span>
+                  <span className="font-semibold text-slate-800">{latestOrder.pizzaName}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>CRUST BASE</span>
+                  <span className="text-slate-800">{latestOrder.baseName}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>TOPPING</span>
+                  <span>{latestOrder.toppingName}</span>
+                </div>
+              </>
+            )}
             <div className="flex justify-between font-bold text-slate-800 border-t border-slate-100 pt-2">
               <span>QUANTITY</span>
               <span>{latestOrder.quantity}x</span>

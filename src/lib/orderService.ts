@@ -229,12 +229,43 @@ async function resolveMenuItemId(
  * Follows the strict high-contrast database schema.
  */
 export async function submitOrder(
-  input: PizzaOrderInput,
+  input: PizzaOrderInput & {
+    items?: Array<{
+      baseId: string;
+      baseName: string;
+      basePrice: number;
+      typeId: string;
+      pizzaName: string;
+      pizzaPrice: number;
+      toppingId: string;
+      toppingName: string;
+      toppingPrice: number;
+      quantity: number;
+    }>;
+  },
   financials: OrderFinancials,
-  pizzaDetails: { baseName: string; pizzaName: string; toppingName: string }
+  pizzaDetails?: { baseName: string; pizzaName: string; toppingName: string }
 ) {
+  const isMultiItem = !!(input.items && input.items.length > 0);
+  const qty = isMultiItem
+    ? input.items!.reduce((sum, item) => sum + item.quantity, 0)
+    : input.quantity;
+
+  const firstItem = isMultiItem ? input.items![0] : null;
+  const resolvedPizzaDetails = pizzaDetails || (firstItem ? {
+    baseName: firstItem.baseName,
+    pizzaName: firstItem.pizzaName,
+    toppingName: firstItem.toppingName,
+  } : { baseName: 'Thin Crust', pizzaName: 'Custom Pizza', toppingName: 'None' });
+
   // 1. Re-validate all inputs prior to submission (strict safety check)
-  const validation = validatePizzaOrder(input);
+  const validationInput = {
+    customerName: input.customerName,
+    customerPhone: input.customerPhone,
+    quantity: qty,
+    paymentMode: input.paymentMode,
+  };
+  const validation = validatePizzaOrder(validationInput);
   if (!validation.isValid) {
     const errorMsg = Object.values(validation.errors).join(' ');
     throw new Error(`Validation failed: ${errorMsg}`);
@@ -248,21 +279,61 @@ export async function submitOrder(
 
   if (!supabase) {
     // Save to local fallback storage if Supabase is not configured
-    const localOrder = saveLocalFallbackOrder(input, financials, pizzaDetails);
+    const localOrder = {
+      id: `local_${Date.now()}`,
+      customer_name: input.customerName,
+      customer_phone: input.customerPhone,
+      payment_mode: input.paymentMode!,
+      quantity: qty,
+      subtotal: financials.subtotal,
+      discount: financials.discount,
+      gst: financials.gst,
+      final_total: financials.finalTotal,
+      created_at: new Date().toISOString(),
+      pizza: resolvedPizzaDetails,
+      synced: false,
+      items: input.items,
+    };
+    
+    try {
+      const existing = localStorage.getItem('slicematic_orders_history');
+      const history = existing ? JSON.parse(existing) : [];
+      history.unshift(localOrder);
+      localStorage.setItem('slicematic_orders_history', JSON.stringify(history.slice(0, 50)));
+    } catch (e) {
+      console.error('Error writing order to local history:', e);
+    }
     
     // Auto-deduct inventory ingredients for local simulation
     let warningMessage = '';
     try {
-      const orderNumId = parseInt(localOrder.id.replace('local_', '')) || 0;
-      const { warnings } = await deductInventoryForOrder(
-        orderNumId,
-        pizzaDetails.baseName,
-        pizzaDetails.pizzaName,
-        pizzaDetails.toppingName,
-        input.quantity
-      );
-      if (warnings.length > 0) {
-        warningMessage = ' ' + warnings.join(' | ');
+      const orderNumId = Date.now();
+      const allWarnings: string[] = [];
+      
+      if (isMultiItem) {
+        for (const item of input.items!) {
+          const { warnings } = await deductInventoryForOrder(
+            orderNumId,
+            item.baseName,
+            item.pizzaName,
+            item.toppingName,
+            item.quantity
+          );
+          allWarnings.push(...warnings);
+        }
+      } else {
+        const { warnings } = await deductInventoryForOrder(
+          orderNumId,
+          resolvedPizzaDetails.baseName,
+          resolvedPizzaDetails.pizzaName,
+          resolvedPizzaDetails.toppingName,
+          qty
+        );
+        allWarnings.push(...warnings);
+      }
+      
+      if (allWarnings.length > 0) {
+        warningMessage = ' ' + Array.from(new Set(allWarnings)).join(' | ');
       }
     } catch (invErr) {
       console.warn('Local inventory deduction failed:', invErr);
@@ -279,22 +350,9 @@ export async function submitOrder(
   try {
     console.log('Attempting order submission...');
 
-    // Resolve base, pizza, topping IDs from menu_items dynamically
-    let baseId = 1;
-    let pizzaId = 1;
-    let toppingId = 1;
-
-    try {
-      baseId = await resolveMenuItemId(supabase, 'base', pizzaDetails.baseName, 150.0);
-      pizzaId = await resolveMenuItemId(supabase, 'pizza', pizzaDetails.pizzaName, 299.0);
-      toppingId = await resolveMenuItemId(supabase, 'topping', pizzaDetails.toppingName, 40.0);
-    } catch (resolveErr) {
-      console.warn('Could not auto-resolve menu_items IDs, proceeding with defaults:', resolveErr);
-    }
-
     const phone = sanitizePhoneNumber(input.customerPhone);
 
-    // 1. Ensure customer exists in customers table (for schemas with REFERENCES customers(phone))
+    // 1. Ensure customer exists in customers table
     try {
       const customerData = {
         phone,
@@ -333,7 +391,6 @@ export async function submitOrder(
     let orderId: any = null;
     let savedInSchema = '';
     let dbErrorDetails = '';
-    const qty = input.quantity;
     const sub = financials.subtotal;
     const disc = financials.discount;
     const gstVal = financials.gst;
@@ -506,50 +563,136 @@ export async function submitOrder(
 
     // 3. Try Inserting Order Line Items / Relationships (Best effort, does not throw)
     try {
-      const { error: itemsErr } = await supabase
-        .from('order_items')
-        .insert([
-          {
-            order_id: orderId,
-            item_id: baseId,
-            item_type: 'base',
-            item_name: pizzaDetails.baseName,
-            unit_price: financials.subtotal / input.quantity,
-          },
-          {
-            order_id: orderId,
-            item_id: pizzaId,
-            item_type: 'pizza',
-            item_name: pizzaDetails.pizzaName,
-            unit_price: financials.subtotal / input.quantity,
-          },
-          {
-            order_id: orderId,
-            item_id: toppingId,
-            item_type: 'topping',
-            item_name: pizzaDetails.toppingName,
-            unit_price: financials.subtotal / input.quantity,
-          }
-        ]);
-      if (itemsErr) {
-        console.warn('order_items table insertion failed (schema might use order_line_items):', itemsErr.message);
+      if (isMultiItem) {
+        const orderItemsToInsert: any[] = [];
+        const orderLineItemsToInsert: any[] = [];
         
-        // Attempt B: order_line_items table
-        const { error: lineItemsErr } = await supabase
-          .from('order_line_items')
-          .insert([
+        for (const item of input.items!) {
+          let bId = 1;
+          let pId = 1;
+          let tId = 1;
+          try {
+            bId = await resolveMenuItemId(supabase, 'base', item.baseName, item.basePrice || 150.0);
+            pId = await resolveMenuItemId(supabase, 'pizza', item.pizzaName, item.pizzaPrice || 299.0);
+            tId = await resolveMenuItemId(supabase, 'topping', item.toppingName, item.toppingPrice || 40.0);
+          } catch (resErr) {
+            console.warn('Could not auto-resolve multi-item menu_items IDs:', resErr);
+          }
+          
+          for (let q = 0; q < item.quantity; q++) {
+            orderItemsToInsert.push(
+              {
+                order_id: orderId,
+                item_id: bId,
+                item_type: 'base',
+                item_name: item.baseName,
+                unit_price: item.basePrice || 150.0,
+              },
+              {
+                order_id: orderId,
+                item_id: pId,
+                item_type: 'pizza',
+                item_name: item.pizzaName,
+                unit_price: item.pizzaPrice || 299.0,
+              },
+              {
+                order_id: orderId,
+                item_id: tId,
+                item_type: 'topping',
+                item_name: item.toppingName,
+                unit_price: item.toppingPrice || 40.0,
+              }
+            );
+            
+            orderLineItemsToInsert.push({
+              order_id: orderId,
+              base_id: bId,
+              pizza_id: pId,
+              topping_id: tId,
+              base_name: item.baseName,
+              pizza_name: item.pizzaName,
+              topping_name: item.toppingName,
+            });
+          }
+        }
+        
+        const { error: itemsErr } = await supabase
+          .from('order_items')
+          .insert(orderItemsToInsert);
+        if (itemsErr) {
+          console.warn('order_items table insertion failed (schema might use order_line_items):', itemsErr.message);
+          
+          const { error: lineItemsErr } = await supabase
+            .from('order_line_items')
+            .insert(orderLineItemsToInsert);
+          if (lineItemsErr) {
+            console.warn('order_line_items table insertion also failed:', lineItemsErr.message);
+          }
+        }
+      } else {
+        // Single item fallback
+        let baseId = 1;
+        let pizzaId = 1;
+        let toppingId = 1;
+        try {
+          baseId = await resolveMenuItemId(supabase, 'base', resolvedPizzaDetails.baseName, 150.0);
+          pizzaId = await resolveMenuItemId(supabase, 'pizza', resolvedPizzaDetails.pizzaName, 299.0);
+          toppingId = await resolveMenuItemId(supabase, 'topping', resolvedPizzaDetails.toppingName, 40.0);
+        } catch (resErr) {
+          console.warn('Could not auto-resolve menu_items IDs, proceeding with defaults:', resErr);
+        }
+        
+        const orderItemsToInsert: any[] = [];
+        const orderLineItemsToInsert: any[] = [];
+        
+        for (let q = 0; q < qty; q++) {
+          orderItemsToInsert.push(
             {
               order_id: orderId,
-              base_id: baseId,
-              pizza_id: pizzaId,
-              topping_id: toppingId,
-              base_name: pizzaDetails.baseName,
-              pizza_name: pizzaDetails.pizzaName,
-              topping_name: pizzaDetails.toppingName,
+              item_id: baseId,
+              item_type: 'base',
+              item_name: resolvedPizzaDetails.baseName,
+              unit_price: financials.subtotal / qty,
+            },
+            {
+              order_id: orderId,
+              item_id: pizzaId,
+              item_type: 'pizza',
+              item_name: resolvedPizzaDetails.pizzaName,
+              unit_price: financials.subtotal / qty,
+            },
+            {
+              order_id: orderId,
+              item_id: toppingId,
+              item_type: 'topping',
+              item_name: resolvedPizzaDetails.toppingName,
+              unit_price: financials.subtotal / qty,
             }
-          ]);
-        if (lineItemsErr) {
-          console.warn('order_line_items table insertion also failed (continuing anyway):', lineItemsErr.message);
+          );
+          
+          orderLineItemsToInsert.push({
+            order_id: orderId,
+            base_id: baseId,
+            pizza_id: pizzaId,
+            topping_id: toppingId,
+            base_name: resolvedPizzaDetails.baseName,
+            pizza_name: resolvedPizzaDetails.pizzaName,
+            topping_name: resolvedPizzaDetails.toppingName,
+          });
+        }
+        
+        const { error: itemsErr } = await supabase
+          .from('order_items')
+          .insert(orderItemsToInsert);
+        if (itemsErr) {
+          console.warn('order_items table insertion failed (schema might use order_line_items):', itemsErr.message);
+          
+          const { error: lineItemsErr } = await supabase
+            .from('order_line_items')
+            .insert(orderLineItemsToInsert);
+          if (lineItemsErr) {
+            console.warn('order_line_items table insertion also failed:', lineItemsErr.message);
+          }
         }
       }
     } catch (itemExc) {
@@ -588,13 +731,14 @@ export async function submitOrder(
       customer_name: input.customerName,
       customer_phone: phone,
       payment_mode: input.paymentMode,
-      quantity: input.quantity,
+      quantity: qty,
       subtotal: financials.subtotal,
       discount: financials.discount,
       gst: financials.gst,
       final_total: financials.finalTotal,
       created_at: new Date().toISOString(),
-      pizza: pizzaDetails,
+      pizza: resolvedPizzaDetails,
+      items: input.items,
       synced: true,
     };
     saveLocalOrderToHistory(savedOrder);
@@ -602,15 +746,31 @@ export async function submitOrder(
     // Auto-deduct inventory ingredients
     let warningMessage = '';
     try {
-      const { warnings } = await deductInventoryForOrder(
-        orderId,
-        pizzaDetails.baseName,
-        pizzaDetails.pizzaName,
-        pizzaDetails.toppingName,
-        input.quantity
-      );
-      if (warnings.length > 0) {
-        warningMessage = ' ' + warnings.join(' | ');
+      const allWarnings: string[] = [];
+      if (isMultiItem) {
+        for (const item of input.items!) {
+          const { warnings } = await deductInventoryForOrder(
+            orderId,
+            item.baseName,
+            item.pizzaName,
+            item.toppingName,
+            item.quantity
+          );
+          allWarnings.push(...warnings);
+        }
+      } else {
+        const { warnings } = await deductInventoryForOrder(
+          orderId,
+          resolvedPizzaDetails.baseName,
+          resolvedPizzaDetails.pizzaName,
+          resolvedPizzaDetails.toppingName,
+          qty
+        );
+        allWarnings.push(...warnings);
+      }
+      
+      if (allWarnings.length > 0) {
+        warningMessage = ' ' + Array.from(new Set(allWarnings)).join(' | ');
       }
     } catch (invErr) {
       console.warn('Inventory deduction failed:', invErr);
@@ -839,7 +999,7 @@ CREATE TABLE IF NOT EXISTS menu_items (
 CREATE TABLE IF NOT EXISTS orders (
     order_id         SERIAL PRIMARY KEY,
     customer_phone   VARCHAR(10) NOT NULL REFERENCES customers(phone),
-    quantity         INTEGER NOT NULL CHECK (quantity BETWEEN 1 AND 10),
+    quantity         INTEGER NOT NULL CHECK (quantity BETWEEN 1 AND 100),
     subtotal         NUMERIC(8,2) NOT NULL,
     discount_amount  NUMERIC(8,2) NOT NULL DEFAULT 0,
     gst_amount       NUMERIC(8,2) NOT NULL,

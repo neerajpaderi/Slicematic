@@ -185,11 +185,17 @@ app.post('/api/analyze-query', async (req: Request, res: Response): Promise<void
   try {
     console.log('Generating business performance SELECT query & mock/real records using Gemini...');
     let prompt = `You are a brilliant business data analyst for SliceMatic pizza shop. 
-Your target database is PostgreSQL. You have access to the following table schemas:
+Your target database is PostgreSQL. You have access to the following 9 table schemas:
 
-1. orders (id, created_at, customer_name, customer_phone, quantity, subtotal, discount_amount, gst_amount, final_total, payment_mode, order_source, order_status)
-2. menu_items (id, category, name, price_inr)
-3. order_line_items (id, order_id, base_id, pizza_id, topping_id)
+1. customers (phone VARCHAR(10) PRIMARY KEY, name VARCHAR(40) NOT NULL, created_at TIMESTAMP)
+2. staff_users (id SERIAL PRIMARY KEY, username VARCHAR(50) UNIQUE, password_hash VARCHAR(100), role VARCHAR(20) CHECK (role IN ('cashier', 'admin')), created_at TIMESTAMP)
+3. menu_items (item_id SERIAL PRIMARY KEY, item_code VARCHAR(10) UNIQUE, category VARCHAR(10) CHECK (category IN ('base', 'pizza', 'topping')), name VARCHAR(50) UNIQUE, price NUMERIC(6,2), is_active BOOLEAN)
+4. orders (order_id SERIAL PRIMARY KEY, customer_phone VARCHAR(10) REFERENCES customers(phone), quantity INTEGER, subtotal NUMERIC(8,2), discount_amount NUMERIC(8,2), gst_amount NUMERIC(8,2), final_total NUMERIC(8,2), order_time TIMESTAMP)
+5. order_items (order_item_id SERIAL PRIMARY KEY, order_id INTEGER REFERENCES orders(order_id), item_id INTEGER REFERENCES menu_items(item_id), item_type VARCHAR(10), item_name VARCHAR(50), unit_price NUMERIC(6,2))
+6. payments (payment_id SERIAL PRIMARY KEY, order_id INTEGER REFERENCES orders(order_id), payment_mode VARCHAR(10) CHECK (payment_mode IN ('Cash', 'Card', 'UPI')), paid_at TIMESTAMP)
+7. order_status (status_id SERIAL PRIMARY KEY, order_id INTEGER REFERENCES orders(order_id), status VARCHAR(20) CHECK (status IN ('Placed', 'Preparing', 'Ready', 'Completed')), updated_at TIMESTAMP)
+8. inventory (inventory_id SERIAL PRIMARY KEY, ingredient_name VARCHAR(30) UNIQUE, unit VARCHAR(10), current_stock NUMERIC(8,2), reorder_threshold NUMERIC(8,2), updated_at TIMESTAMP)
+9. menu_item_ingredients (ingredient_map_id SERIAL PRIMARY KEY, item_id INTEGER REFERENCES menu_items(item_id), inventory_id INTEGER REFERENCES inventory(inventory_id), quantity_required NUMERIC(8,3))
 
 Given the user's natural language question: "${question}"
 Your job is to generate a valid, highly efficient PostgreSQL SELECT query that extracts the answer, explain it briefly, and provide the query output rows.
@@ -207,7 +213,7 @@ Here is the actual, real-time data currently fetched from their database tables:
 ${JSON.stringify(db_data, null, 2)}
 
 Because you have access to their real data, you MUST analyze this dataset, execute the SQL query logic in-memory over these actual rows, and return the REAL query results in the "simulated_results" array.
-Do not invent mock data. "simulated_results" must contain the exact computed result rows of running your SQL query against the real tables provided above.
+Do not invent mock data. "simulated_results" must contain the exact computed result rows of running your SQL query against the real tables provided above. For example, if they ask for payment modes, join the orders and payments tables in-memory to get exact counts or sum totals!
 `;
     } else {
       prompt += `

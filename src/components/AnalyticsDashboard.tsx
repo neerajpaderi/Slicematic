@@ -56,6 +56,7 @@ export default function AnalyticsDashboard({ user, onNavigateToCashier }: Analyt
   const [queryResultData, setQueryResultData] = useState<any[] | null>(null);
   const [analystError, setAnalystError] = useState('');
   const [copied, setCopied] = useState(false);
+  const [isLiveResult, setIsLiveResult] = useState(false);
 
   // Real database stats for analytics overview
   const [stats, setStats] = useState({
@@ -219,25 +220,65 @@ export default function AnalyticsDashboard({ user, onNavigateToCashier }: Analyt
     setSqlExplanation('');
     setSqlColumns([]);
     setQueryResultData(null);
+    setIsLiveResult(false);
 
     const supabase = getSupabaseClient();
     let db_data: any = null;
 
     if (supabase) {
       try {
-        const [ordersRes, menuItemsRes, orderItemsRes, customersRes] = await Promise.all([
-          supabase.from('orders').select('*').limit(200),
-          supabase.from('menu_items').select('*'),
-          supabase.from('order_items').select('*').limit(300),
-          supabase.from('customers').select('*').limit(200)
+        const fetchTable = async (tableName: string, limit?: number) => {
+          try {
+            let query = supabase.from(tableName).select('*');
+            if (limit) {
+              query = query.limit(limit);
+            }
+            const { data, error } = await query;
+            if (error) {
+              console.warn(`Table ${tableName} fetch error:`, error.message);
+              return [];
+            }
+            return data || [];
+          } catch (err) {
+            console.warn(`Exception fetching table ${tableName}:`, err);
+            return [];
+          }
+        };
+
+        const [
+          orders,
+          menu_items,
+          order_items,
+          customers,
+          payments,
+          order_status,
+          inventory,
+          menu_item_ingredients,
+          staff_users
+        ] = await Promise.all([
+          fetchTable('orders', 300),
+          fetchTable('menu_items'),
+          fetchTable('order_items', 500),
+          fetchTable('customers', 300),
+          fetchTable('payments', 300),
+          fetchTable('order_status', 300),
+          fetchTable('inventory'),
+          fetchTable('menu_item_ingredients', 300),
+          fetchTable('staff_users', 100)
         ]);
 
         db_data = {
-          orders: ordersRes.data || [],
-          menu_items: menuItemsRes.data || [],
-          order_items: orderItemsRes.data || [],
-          customers: customersRes.data || []
+          orders,
+          menu_items,
+          order_items,
+          customers,
+          payments,
+          order_status,
+          inventory,
+          menu_item_ingredients,
+          staff_users
         };
+        setIsLiveResult(true);
       } catch (dbErr) {
         console.warn('Could not pre-fetch Supabase tables for dynamic query execution:', dbErr);
       }
@@ -600,7 +641,9 @@ export default function AnalyticsDashboard({ user, onNavigateToCashier }: Analyt
                 <div className="bg-white rounded-2xl border border-slate-200 p-5 space-y-4">
                   <div className="border-b border-slate-100 pb-2.5 flex justify-between items-center text-xs">
                     <h4 className="font-mono font-bold text-slate-400 uppercase">Compiled Return Dataset</h4>
-                    <span className="bg-emerald-50 text-emerald-700 font-bold px-2 py-0.5 rounded border border-emerald-100 text-[10px]">SIMULATED EXECUTION</span>
+                    <span className="bg-emerald-50 text-emerald-700 font-bold px-2 py-0.5 rounded border border-emerald-100 text-[10px]">
+                      {isLiveResult ? 'LIVE REAL-TIME DATABASE RESULTS' : 'SIMULATED EXECUTION'}
+                    </span>
                   </div>
 
                   <div className="overflow-x-auto rounded-xl border border-slate-100">

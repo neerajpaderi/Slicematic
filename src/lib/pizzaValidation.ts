@@ -89,7 +89,7 @@ export function validatePizzaOrder(input: Partial<PizzaOrderInput>): ValidationR
     }
   }
 
-  // 3. Quantity Validation: Integer from 1 to 10 only. Reject floats, strings, 0, or negatives.
+  // 3. Quantity Validation: Integer from 1 to 100 only. Reject floats, strings, 0, or negatives.
   const qty = input.quantity;
   if (qty === undefined || qty === null) {
     errors.quantity = 'Quantity is required.';
@@ -102,8 +102,8 @@ export function validatePizzaOrder(input: Partial<PizzaOrderInput>): ValidationR
     } else if (!Number.isInteger(parsedQty)) {
       errors.quantity = 'Quantity must be a whole integer (no floats allowed).';
       isValid = false;
-    } else if (parsedQty < 1 || parsedQty > 10) {
-      errors.quantity = 'Quantity must be an integer between 1 and 10.';
+    } else if (parsedQty < 1 || parsedQty > 100) {
+      errors.quantity = 'Quantity must be an integer between 1 and 100.';
       isValid = false;
     }
   }

@@ -18,11 +18,12 @@ import {
   Plus,
   Minus,
   Check,
-  Percent
+  Percent,
+  Trash2
 } from 'lucide-react';
 import { getActiveMenuItems } from '../lib/menuService';
 import { submitOrder } from '../lib/orderService';
-import { validatePizzaOrder, calculateFinancials } from '../lib/pizzaValidation';
+import { validatePizzaOrder } from '../lib/pizzaValidation';
 import { PizzaBase, PizzaType, PizzaTopping, ValidationError } from '../types';
 
 interface TableOrderingProps {
@@ -45,6 +46,20 @@ export default function TableOrdering({ tableId }: TableOrderingProps) {
   const [selectedTopping, setSelectedTopping] = useState('');
   const [quantity, setQuantity] = useState(1);
   const [paymentMode, setPaymentMode] = useState<'Cash' | 'Card' | 'UPI'>('UPI');
+
+  // List of added pizza items (the Cart)
+  const [cartItems, setCartItems] = useState<Array<{
+    baseId: string;
+    baseName: string;
+    basePrice: number;
+    typeId: string;
+    pizzaName: string;
+    pizzaPrice: number;
+    toppingId: string;
+    toppingName: string;
+    toppingPrice: number;
+    quantity: number;
+  }>>([]);
 
   // Interactive UI states
   const [errors, setErrors] = useState<ValidationError>({});
@@ -73,45 +88,139 @@ export default function TableOrdering({ tableId }: TableOrderingProps) {
     loadMenu();
   }, []);
 
-  // Validate on changes
+  // Calculate totals of items in the cart
+  const totalSubtotal = cartItems.reduce((sum, item) => {
+    const itemUnitPrice = item.basePrice + item.pizzaPrice + item.toppingPrice;
+    return sum + (itemUnitPrice * item.quantity);
+  }, 0);
+
+  const totalQuantity = cartItems.reduce((sum, item) => sum + item.quantity, 0);
+  const hasDiscount = totalQuantity >= 5;
+  const discountAmount = hasDiscount ? totalSubtotal * 0.10 : 0;
+  const postDiscountTotal = totalSubtotal - discountAmount;
+  const gstAmount = postDiscountTotal * 0.18;
+  const finalTotalAmount = postDiscountTotal + gstAmount;
+
+  const orderFinancials = {
+    unitPrice: 0,
+    subtotal: totalSubtotal,
+    discount: discountAmount,
+    postDiscountTotal,
+    gst: gstAmount,
+    finalTotal: finalTotalAmount,
+    hasDiscount,
+  };
+
+  // Validate customer inputs
   useEffect(() => {
     if (customerName || customerPhone) {
       const res = validatePizzaOrder({
         customerName,
         customerPhone,
-        quantity,
+        quantity: totalQuantity || 1,
         paymentMode,
       });
       setErrors(res.errors);
     }
-  }, [customerName, customerPhone, quantity, paymentMode]);
+  }, [customerName, customerPhone, totalQuantity, paymentMode]);
 
-  // Calculations
+  // Current customization options selected
   const currentBase = bases.find(b => b.id === selectedBase) || bases[0];
   const currentType = pizzas.find(t => t.id === selectedType) || pizzas[0];
   const currentTopping = toppings.find(p => p.id === selectedTopping) || toppings[0];
 
-  const financials = currentBase && currentType && currentTopping
-    ? calculateFinancials(quantity, currentBase.price, currentType.price, currentTopping.price)
-    : { unitPrice: 0, subtotal: 0, discount: 0, postDiscountTotal: 0, gst: 0, finalTotal: 0, hasDiscount: false };
+  const currentItemUnitPrice = currentBase && currentType && currentTopping
+    ? currentBase.price + currentType.price + currentTopping.price
+    : 0;
 
-  // Handle Order Submit
+  // Add customized pizza combo to order (cart)
+  const handleAddPizzaToOrder = () => {
+    if (!selectedBase || !selectedType || !selectedTopping) {
+      setErrorMsg('Please select a base, flavor, and topping first.');
+      return;
+    }
+
+    const existingIdx = cartItems.findIndex(item => 
+      item.baseId === selectedBase && 
+      item.typeId === selectedType && 
+      item.toppingId === selectedTopping
+    );
+
+    if (existingIdx > -1) {
+      const updated = [...cartItems];
+      const nextQty = updated[existingIdx].quantity + quantity;
+      if (nextQty > 10) {
+        setErrorMsg('You can order a maximum of 10 pizzas of the same customization.');
+        return;
+      }
+      updated[existingIdx].quantity = nextQty;
+      setCartItems(updated);
+    } else {
+      setCartItems([...cartItems, {
+        baseId: selectedBase,
+        baseName: currentBase.name,
+        basePrice: currentBase.price,
+        typeId: selectedType,
+        pizzaName: currentType.name,
+        pizzaPrice: currentType.price,
+        toppingId: selectedTopping,
+        toppingName: currentTopping.name,
+        toppingPrice: currentTopping.price,
+        quantity,
+      }]);
+    }
+
+    setErrorMsg('');
+    setQuantity(1);
+  };
+
+  // Remove pizza combo from cart
+  const handleRemoveItem = (index: number) => {
+    const updated = cartItems.filter((_, idx) => idx !== index);
+    setCartItems(updated);
+  };
+
+  // Update item quantity
+  const handleUpdateItemQty = (index: number, newQty: number) => {
+    if (newQty < 1 || newQty > 10) return;
+    const updated = [...cartItems];
+    updated[index].quantity = newQty;
+    setCartItems(updated);
+  };
+
+  // Submit complete multi-selection order
   const handlePlaceOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrors({});
     setErrorMsg('');
 
+    if (cartItems.length === 0) {
+      setErrorMsg('Your order is empty. Please configure a pizza and click "Add Pizza to Order" first.');
+      return;
+    }
+
+    const normalizedTableId = ['1', '2', '3', '4', '5'].includes(tableId) ? tableId : '1';
+    const orderSource = `Tablet_Table_${normalizedTableId}`;
+
     const inputData = {
       customerName,
       customerPhone,
-      baseId: selectedBase,
-      typeId: selectedType,
-      toppingId: selectedTopping,
-      quantity,
+      baseId: cartItems[0].baseId,
+      typeId: cartItems[0].typeId,
+      toppingId: cartItems[0].toppingId,
+      quantity: totalQuantity,
       paymentMode,
+      orderSource,
+      items: cartItems,
     };
 
-    const validation = validatePizzaOrder(inputData);
+    const validation = validatePizzaOrder({
+      customerName,
+      customerPhone,
+      quantity: totalQuantity,
+      paymentMode,
+    });
+
     if (!validation.isValid) {
       setErrors(validation.errors);
       return;
@@ -120,40 +229,26 @@ export default function TableOrdering({ tableId }: TableOrderingProps) {
     setSubmitting(true);
 
     try {
-      // Map table ID to required ENUM source, e.g. Tablet_Table_1, Tablet_Table_2...
-      // Supports Table 1 to 5. If tableId exceeds 5 or is invalid, fallback to Tablet_Table_1
-      const normalizedTableId = ['1', '2', '3', '4', '5'].includes(tableId) ? tableId : '1';
-      const orderSource = `Tablet_Table_${normalizedTableId}`;
-
-      const pizzaDetails = {
-        baseName: currentBase.name,
-        pizzaName: currentType.name,
-        toppingName: currentTopping.name,
-      };
-
-      const result = await submitOrder({ ...inputData, orderSource }, financials, pizzaDetails);
+      const result = await submitOrder(inputData, orderFinancials);
 
       if (result.success) {
         setOrderCompleted({
           orderId: result.order?.id || Math.floor(Math.random() * 89999 + 10000),
           customerName: customerName.trim(),
           tableId: tableId,
-          pizzaName: currentType.name,
-          baseName: currentBase.name,
-          toppingName: currentTopping.name,
-          quantity,
-          finalTotal: financials.finalTotal,
+          items: [...cartItems],
+          finalTotal: orderFinancials.finalTotal,
           paymentMode,
         });
 
-        // Background receipt simulation
-        console.log(`[SMS Gateway] Dispatched table order receipt for ₹${financials.finalTotal.toFixed(2)} to ${customerPhone}`);
+        console.log(`[SMS Gateway] Dispatched multi-item table order receipt for ₹${orderFinancials.finalTotal.toFixed(2)} to ${customerPhone}`);
         setSmsNotification(`Digital receipt SMS has been dispatched to +91 ${customerPhone}`);
-        setTimeout(() => setSmsNotification(null), 5000);
+        setTimeout(() => setSmsNotification(null), 6000);
 
-        // Reset fields
+        // Reset forms
         setCustomerName('');
         setCustomerPhone('');
+        setCartItems([]);
         setQuantity(1);
       } else {
         setErrorMsg(result.message || 'Error saving order.');
@@ -179,7 +274,7 @@ export default function TableOrdering({ tableId }: TableOrderingProps) {
       {/* Table Header Banner */}
       <header className="bg-slate-900 text-white py-6 px-4 shadow border-b border-slate-800 text-center relative overflow-hidden">
         <div className="absolute top-[-50%] left-[-10%] w-[120%] h-[200%] bg-gradient-to-tr from-amber-500/10 to-orange-500/5 rotate-12 pointer-events-none" />
-        <div className="max-w-4xl mx-auto flex items-center justify-center gap-3">
+        <div className="max-w-6xl mx-auto flex items-center justify-center gap-3">
           <div className="bg-amber-500 text-slate-950 p-2 rounded-xl">
             <Pizza className="h-6 w-6" />
           </div>
@@ -190,7 +285,7 @@ export default function TableOrdering({ tableId }: TableOrderingProps) {
         </div>
       </header>
 
-      <main className="max-w-4xl mx-auto px-4 mt-8">
+      <main className="max-w-6xl mx-auto px-4 mt-8">
         <AnimatePresence mode="wait">
           {orderCompleted ? (
             <motion.div
@@ -216,23 +311,24 @@ export default function TableOrdering({ tableId }: TableOrderingProps) {
                   <span>CUSTOMER</span>
                   <span className="font-semibold text-slate-800">{orderCompleted.customerName}</span>
                 </div>
-                <div className="flex justify-between text-slate-600">
-                  <span>PIZZA</span>
-                  <span className="font-semibold text-slate-800">{orderCompleted.pizzaName}</span>
+                
+                {/* Cart Items List */}
+                <div className="border-t border-b border-slate-200 py-3 my-2 space-y-2">
+                  <span className="text-[10px] text-slate-400 uppercase tracking-wider block font-bold">ORDERED ITEMS</span>
+                  {orderCompleted.items.map((item: any, idx: number) => (
+                    <div key={idx} className="flex justify-between text-slate-700 font-sans">
+                      <div>
+                        <span className="font-semibold">{item.pizzaName}</span>
+                        <span className="text-[10px] text-slate-400 block">
+                          {item.baseName} {item.toppingId !== 'none' ? `+ ${item.toppingName}` : ''}
+                        </span>
+                      </div>
+                      <span className="font-mono font-bold">{item.quantity}x</span>
+                    </div>
+                  ))}
                 </div>
+
                 <div className="flex justify-between text-slate-600">
-                  <span>CRUST / BASE</span>
-                  <span className="font-semibold text-slate-800">{orderCompleted.baseName}</span>
-                </div>
-                <div className="flex justify-between text-slate-600">
-                  <span>TOPPING</span>
-                  <span className="font-semibold text-slate-800">{orderCompleted.toppingName}</span>
-                </div>
-                <div className="flex justify-between text-slate-600">
-                  <span>QTY</span>
-                  <span className="font-bold text-slate-800">{orderCompleted.quantity}x</span>
-                </div>
-                <div className="flex justify-between text-slate-600 border-t border-dashed border-slate-200 pt-2">
                   <span>PAYMENT MODE</span>
                   <span className="font-semibold text-slate-800">{orderCompleted.paymentMode}</span>
                 </div>
@@ -251,7 +347,7 @@ export default function TableOrdering({ tableId }: TableOrderingProps) {
 
               <button
                 onClick={() => setOrderCompleted(null)}
-                className="w-full bg-slate-900 hover:bg-slate-800 text-white font-semibold py-3.5 px-4 rounded-xl transition duration-150 shadow"
+                className="w-full bg-slate-900 hover:bg-slate-800 text-white font-semibold py-3.5 px-4 rounded-xl transition duration-150 shadow cursor-pointer"
               >
                 Order Another Pizza
               </button>
@@ -262,68 +358,16 @@ export default function TableOrdering({ tableId }: TableOrderingProps) {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="grid grid-cols-1 md:grid-cols-12 gap-8 items-start"
+              className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start"
             >
               {/* Form Section */}
-              <div className="md:col-span-7 bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-6">
+              <div className="lg:col-span-7 bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-6">
                 <div className="border-b border-slate-100 pb-4">
                   <h3 className="font-display font-semibold text-slate-900 text-lg">Build Your Pizza</h3>
                   <p className="text-xs text-slate-500">Pick your favorite base crust, type flavor, and premium toppings.</p>
                 </div>
 
-                <form onSubmit={handlePlaceOrder} className="space-y-6">
-                  {/* Customer Info */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div className="space-y-1.5">
-                      <label htmlFor="table-customer-name" className="text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1.5">
-                        <User className="h-3.5 w-3.5 text-slate-400" />
-                        Your Name
-                      </label>
-                      <input
-                        id="table-customer-name"
-                        type="text"
-                        required
-                        placeholder="e.g. Robin"
-                        value={customerName}
-                        onChange={(e) => setCustomerName(e.target.value)}
-                        className={`w-full bg-slate-50 border rounded-xl px-4 py-2.5 text-sm focus:bg-white focus:outline-none transition ${
-                          errors.customerName ? 'border-red-300 focus:ring-red-500/10' : 'border-slate-200 focus:ring-amber-500/10'
-                        }`}
-                      />
-                      {errors.customerName && (
-                        <p className="text-xs text-rose-600 flex items-center gap-1 mt-0.5 font-medium">
-                          <AlertCircle className="h-3 w-3" />
-                          {errors.customerName}
-                        </p>
-                      )}
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <label htmlFor="table-customer-phone" className="text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1.5">
-                        <Phone className="h-3.5 w-3.5 text-slate-400" />
-                        Phone Number
-                      </label>
-                      <input
-                        id="table-customer-phone"
-                        type="text"
-                        required
-                        maxLength={10}
-                        placeholder="e.g. 9876543210"
-                        value={customerPhone}
-                        onChange={(e) => setCustomerPhone(e.target.value.replace(/\D/g, ''))}
-                        className={`w-full bg-slate-50 border rounded-xl px-4 py-2.5 text-sm focus:bg-white focus:outline-none transition ${
-                          errors.customerPhone ? 'border-red-300 focus:ring-red-500/10' : 'border-slate-200 focus:ring-amber-500/10'
-                        }`}
-                      />
-                      {errors.customerPhone && (
-                        <p className="text-xs text-rose-600 flex items-center gap-1 mt-0.5 font-medium">
-                          <AlertCircle className="h-3 w-3" />
-                          {errors.customerPhone}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-
+                <div className="space-y-6">
                   {/* Pizza Base Selector */}
                   <div className="space-y-2">
                     <label className="text-xs font-bold text-slate-600 uppercase tracking-wider">1. Select Pizza Base</label>
@@ -401,10 +445,10 @@ export default function TableOrdering({ tableId }: TableOrderingProps) {
                     </div>
                   </div>
 
-                  {/* Quantity and Payment selection */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 border-t border-slate-100 pt-5">
+                  {/* Customization Quantity and Add Button */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-t border-slate-100 pt-5">
                     <div className="space-y-1.5">
-                      <label className="text-xs font-bold text-slate-600 uppercase tracking-wider">4. Quantity (1-10)</label>
+                      <label className="text-xs font-bold text-slate-600 uppercase tracking-wider block">Quantity (1-10)</label>
                       <div className="flex items-center gap-2">
                         <button
                           type="button"
@@ -426,93 +470,203 @@ export default function TableOrdering({ tableId }: TableOrderingProps) {
                         >
                           <Plus className="h-3.5 w-3.5" />
                         </button>
+                        <span className="text-xs text-slate-400 font-mono ml-2">
+                          (₹{(currentItemUnitPrice * quantity).toFixed(2)})
+                        </span>
                       </div>
                     </div>
 
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-bold text-slate-600 uppercase tracking-wider">5. Digital Checkout Option</label>
-                      <div className="flex gap-2">
-                        {['UPI', 'Card', 'Cash'].map((mode) => (
-                          <button
-                            key={mode}
-                            type="button"
-                            onClick={() => setPaymentMode(mode as any)}
-                            className={`flex-1 py-2 rounded-xl text-xs font-semibold border transition cursor-pointer ${
-                              paymentMode === mode
-                                ? 'bg-amber-500 text-slate-950 border-amber-500 shadow-sm'
-                                : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
-                            }`}
-                          >
-                            {mode}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={handleAddPizzaToOrder}
+                      className="bg-slate-900 hover:bg-slate-800 text-white font-bold py-3 px-6 rounded-xl shadow transition active:scale-[0.98] flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      <Plus className="h-4 w-4" />
+                      <span>Add Pizza to Order</span>
+                    </button>
                   </div>
-                </form>
+                </div>
               </div>
 
               {/* Sidebar Invoice & Action Panel */}
-              <div className="md:col-span-5 space-y-6">
+              <div className="lg:col-span-5 space-y-6">
+                {/* Cart Items List */}
                 <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
                   <div className="bg-slate-900 text-white px-5 py-3.5 border-b border-slate-800 flex justify-between items-center">
-                    <span className="font-display font-semibold text-sm">Summary Invoice</span>
-                    <span className="font-mono text-[10px] text-slate-400">TABLE #{tableId}</span>
+                    <span className="font-display font-semibold text-sm flex items-center gap-2">
+                      <ShoppingCart className="h-4 w-4 text-amber-500" />
+                      Current Order
+                    </span>
+                    <span className="bg-amber-500 text-slate-950 px-2 py-0.5 rounded-full font-mono text-xs font-bold">
+                      {totalQuantity} Pizzas
+                    </span>
                   </div>
 
                   <div className="p-5 space-y-4">
-                    {/* Live pizza combination title */}
-                    <div className="border-b border-slate-100 pb-3">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">Custom Build</span>
-                      <h4 className="font-display font-bold text-slate-800 mt-1">{currentType?.name || 'Pizza Selection'}</h4>
-                      <p className="text-xs text-slate-500 mt-0.5">
-                        {currentBase?.name} {currentTopping?.id !== 'none' && `+ ${currentTopping?.name}`}
-                      </p>
+                    {cartItems.length === 0 ? (
+                      <div className="text-center py-8 text-slate-400 font-sans space-y-2">
+                        <Pizza className="h-8 w-8 text-slate-300 mx-auto stroke-1" />
+                        <p className="text-xs">Your order list is empty.</p>
+                        <p className="text-[11px] text-slate-400">Configure a pizza and click "Add Pizza to Order" above!</p>
+                      </div>
+                    ) : (
+                      <div className="divide-y divide-slate-100 max-h-72 overflow-y-auto pr-1">
+                        {cartItems.map((item, index) => {
+                          const itemPrice = item.basePrice + item.pizzaPrice + item.toppingPrice;
+                          return (
+                            <div key={index} className="py-3 flex justify-between items-start gap-3">
+                              <div className="space-y-0.5 flex-1">
+                                <h4 className="text-sm font-bold text-slate-800">{item.pizzaName}</h4>
+                                <p className="text-[11px] text-slate-500 leading-tight">
+                                  {item.baseName} {item.toppingId !== 'none' ? `+ ${item.toppingName}` : ''}
+                                </p>
+                                <p className="text-[11px] font-mono font-medium text-amber-600">
+                                  ₹{itemPrice.toFixed(2)} each
+                                </p>
+                              </div>
+                              <div className="flex flex-col items-end gap-1.5 shrink-0">
+                                <div className="flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUpdateItemQty(index, item.quantity - 1)}
+                                    className="h-6 w-6 rounded bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-xs text-slate-600"
+                                  >
+                                    -
+                                  </button>
+                                  <span className="text-xs font-bold w-4 text-center">{item.quantity}</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUpdateItemQty(index, item.quantity + 1)}
+                                    className="h-6 w-6 rounded bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-xs text-slate-600"
+                                  >
+                                    +
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemoveItem(index)}
+                                    className="p-1 rounded text-slate-400 hover:text-rose-600 transition ml-1"
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </button>
+                                </div>
+                                <span className="text-xs font-mono font-bold text-slate-700">
+                                  ₹{(itemPrice * item.quantity).toFixed(2)}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Checkout Panel */}
+                <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-4">
+                  <div className="border-b border-slate-100 pb-3">
+                    <h4 className="font-display font-bold text-slate-800 text-sm">Customer & Checkout Details</h4>
+                  </div>
+
+                  <form onSubmit={handlePlaceOrder} className="space-y-4">
+                    {/* Customer Inputs */}
+                    <div className="space-y-3">
+                      <div className="space-y-1">
+                        <label htmlFor="customer-name-chk" className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                          <User className="h-3 w-3 text-slate-400" />
+                          Your Name
+                        </label>
+                        <input
+                          id="customer-name-chk"
+                          type="text"
+                          required
+                          placeholder="e.g. Robin"
+                          value={customerName}
+                          onChange={(e) => setCustomerName(e.target.value)}
+                          className={`w-full bg-slate-50 border rounded-xl px-3 py-2 text-xs focus:bg-white focus:outline-none transition ${
+                            errors.customerName ? 'border-red-300 focus:ring-red-500/10' : 'border-slate-200 focus:ring-amber-500/10'
+                          }`}
+                        />
+                        {errors.customerName && (
+                          <p className="text-[10px] text-rose-600 flex items-center gap-1 mt-0.5">
+                            <AlertCircle className="h-2.5 w-2.5" />
+                            {errors.customerName}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="space-y-1">
+                        <label htmlFor="customer-phone-chk" className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                          <Phone className="h-3 w-3 text-slate-400" />
+                          Phone Number
+                        </label>
+                        <input
+                          id="customer-phone-chk"
+                          type="text"
+                          required
+                          maxLength={10}
+                          placeholder="e.g. 9876543210"
+                          value={customerPhone}
+                          onChange={(e) => setCustomerPhone(e.target.value.replace(/\D/g, ''))}
+                          className={`w-full bg-slate-50 border rounded-xl px-3 py-2 text-xs focus:bg-white focus:outline-none transition ${
+                            errors.customerPhone ? 'border-red-300 focus:ring-red-500/10' : 'border-slate-200 focus:ring-amber-500/10'
+                          }`}
+                        />
+                        {errors.customerPhone && (
+                          <p className="text-[10px] text-rose-600 flex items-center gap-1 mt-0.5">
+                            <AlertCircle className="h-2.5 w-2.5" />
+                            {errors.customerPhone}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">Payment Option</label>
+                        <div className="flex gap-2">
+                          {['UPI', 'Card', 'Cash'].map((mode) => (
+                            <button
+                              key={mode}
+                              type="button"
+                              onClick={() => setPaymentMode(mode as any)}
+                              className={`flex-1 py-1.5 rounded-lg text-xs font-semibold border transition cursor-pointer ${
+                                paymentMode === mode
+                                  ? 'bg-amber-500 text-slate-950 border-amber-500'
+                                  : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                              }`}
+                            >
+                              {mode}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                     </div>
 
-                    {/* Breakdown */}
-                    <div className="space-y-2 text-xs">
+                    {/* Financial Breakdown */}
+                    <div className="space-y-2 text-xs border-t border-slate-100 pt-3">
                       <div className="flex justify-between text-slate-500">
-                        <span>Base Crust</span>
-                        <span>₹{(currentBase?.price || 0).toFixed(2)}</span>
-                      </div>
-                      <div className="flex justify-between text-slate-500">
-                        <span>Flavor Style</span>
-                        <span>₹{(currentType?.price || 0).toFixed(2)}</span>
-                      </div>
-                      <div className="flex justify-between text-slate-500">
-                        <span>Premium Topping</span>
-                        <span>₹{(currentTopping?.price || 0).toFixed(2)}</span>
-                      </div>
-                      <div className="flex justify-between font-semibold text-slate-700 border-t border-slate-100 pt-2 font-mono">
-                        <span>Pizza Unit Price</span>
-                        <span>₹{financials.unitPrice.toFixed(2)}</span>
-                      </div>
-                      <div className="flex justify-between font-semibold text-slate-700 pt-2 border-t border-slate-100">
-                        <span>Subtotal ({quantity}x)</span>
-                        <span>₹{financials.subtotal.toFixed(2)}</span>
+                        <span>Items Subtotal</span>
+                        <span>₹{orderFinancials.subtotal.toFixed(2)}</span>
                       </div>
 
-                      {/* Discount display */}
-                      {financials.hasDiscount && (
+                      {/* Bulk discount display */}
+                      {orderFinancials.hasDiscount && (
                         <div className="flex justify-between text-emerald-600 font-semibold bg-emerald-50 px-2.5 py-1.5 rounded-lg border border-emerald-100">
                           <span className="flex items-center gap-1">
                             <Percent className="h-3.5 w-3.5" />
-                            10% Bulk Discount
+                            10% Bulk Discount (Qty ≥ 5)
                           </span>
-                          <span>-₹{financials.discount.toFixed(2)}</span>
+                          <span>-₹{orderFinancials.discount.toFixed(2)}</span>
                         </div>
                       )}
 
-                      <div className="flex justify-between text-slate-500 border-t border-slate-100 pt-2">
+                      <div className="flex justify-between text-slate-500">
                         <span>GST Tax (18%)</span>
-                        <span>₹{financials.gst.toFixed(2)}</span>
+                        <span>₹{orderFinancials.gst.toFixed(2)}</span>
                       </div>
 
                       <div className="flex justify-between items-center text-slate-900 border-t border-dashed border-slate-200 pt-3 mt-2">
                         <span className="font-bold text-sm">Payable Amount</span>
-                        <span className="font-mono font-extrabold text-xl text-slate-900 bg-slate-100 px-2.5 py-1 rounded-lg">
-                          ₹{financials.finalTotal.toFixed(2)}
+                        <span className="font-mono font-extrabold text-lg text-slate-900 bg-slate-100 px-2.5 py-1 rounded-lg">
+                          ₹{orderFinancials.finalTotal.toFixed(2)}
                         </span>
                       </div>
                     </div>
@@ -525,9 +679,9 @@ export default function TableOrdering({ tableId }: TableOrderingProps) {
                     )}
 
                     <button
-                      onClick={handlePlaceOrder}
-                      disabled={submitting || !customerName.trim() || !customerPhone.trim()}
-                      className="w-full bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 disabled:from-slate-200 disabled:to-slate-200 disabled:text-slate-400 text-slate-950 font-bold py-3 px-4 rounded-xl shadow transition active:scale-[0.98] flex items-center justify-center gap-2 cursor-pointer mt-4"
+                      type="submit"
+                      disabled={submitting || cartItems.length === 0 || !customerName.trim() || !customerPhone.trim()}
+                      className="w-full bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 disabled:from-slate-200 disabled:to-slate-200 disabled:text-slate-400 text-slate-950 font-bold py-3 px-4 rounded-xl shadow transition active:scale-[0.98] flex items-center justify-center gap-2 cursor-pointer"
                     >
                       {submitting ? (
                         <>
@@ -541,7 +695,7 @@ export default function TableOrdering({ tableId }: TableOrderingProps) {
                         </>
                       )}
                     </button>
-                  </div>
+                  </form>
                 </div>
               </div>
             </motion.div>
