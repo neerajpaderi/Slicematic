@@ -829,7 +829,7 @@ CREATE TABLE IF NOT EXISTS menu_items (
     item_code   VARCHAR(10) NOT NULL UNIQUE,
     category    VARCHAR(10) NOT NULL CHECK (category IN ('base', 'pizza', 'topping')),
     name        VARCHAR(50) NOT NULL UNIQUE,
-    price       NUMERIC(6,2) NOT NULL CHECK (price > 0),
+    price       NUMERIC(6,2) NOT NULL CHECK (price >= 0),
     is_active   BOOLEAN NOT NULL DEFAULT true
 );
 

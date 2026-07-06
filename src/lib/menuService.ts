@@ -124,24 +124,75 @@ async function seedDefaultMenuItems(supabase: any) {
       ...PIZZA_TOPPINGS.map((t, i) => makeItem('topping', t.name, t.price, `T_${i+1}`)),
     ];
 
-    const { error } = await supabase.from('menu_items').insert(itemsToInsert);
+    // First, query all existing menu items so we never insert duplicates
+    const { data: existing, error: fetchErr } = await supabase
+      .from('menu_items')
+      .select('item_code, name');
+
+    const existingCodes = new Set<string>();
+    const existingNames = new Set<string>();
+
+    if (existing && !fetchErr) {
+      for (const row of existing) {
+        if (row.item_code) existingCodes.add(row.item_code);
+        if (row.name) existingNames.add(row.name);
+      }
+    }
+
+    // Now filter items to insert that are completely unique
+    const uniqueItemsToInsert = itemsToInsert.filter(
+      item => !existingCodes.has(item.item_code) && !existingNames.has(item.name)
+    );
+
+    if (uniqueItemsToInsert.length === 0) {
+      console.log('All default menu items already exist in Supabase.');
+      return;
+    }
+
+    // Try bulk insert of completely unique items
+    const { error } = await supabase.from('menu_items').insert(uniqueItemsToInsert);
     if (error) {
-      console.warn('First seeding attempt failed, trying individual field structures...', error.message);
-      for (const item of itemsToInsert) {
-        // Try inserting with price, item_code
+      console.warn('Bulk insert failed, trying individual insert with check-constraint safety:', error.message);
+      for (const item of uniqueItemsToInsert) {
+        // Double check existence in this loop
+        const { data: checkExist } = await supabase
+          .from('menu_items')
+          .select('item_id')
+          .or(`item_code.eq.${item.item_code},name.eq.${item.name}`);
+        
+        if (checkExist && checkExist.length > 0) {
+          continue; // skip if somehow already inserted
+        }
+
+        // Adjust price if it is 0 and the DB has check constraint price > 0
+        let priceToUse = item.price;
+        if (priceToUse === 0) {
+          const { error: err0 } = await supabase.from('menu_items').insert({
+            category: item.category,
+            name: item.name,
+            price: 0,
+            item_code: item.item_code,
+            is_active: true
+          });
+          if (!err0) continue; // Succeeded with price 0!
+          
+          console.warn('Price 0 insert failed (likely price > 0 check constraint). Trying with price 0.01 for No Extra Topping');
+          priceToUse = 0.01; // Tiny fallback to satisfy check constraint
+        }
+
         const { error: err1 } = await supabase.from('menu_items').insert({
           category: item.category,
           name: item.name,
-          price: item.price,
+          price: priceToUse,
           item_code: item.item_code,
           is_active: true
         });
+
         if (err1) {
-          // Try inserting with price_inr and without item_code
           const { error: err2 } = await supabase.from('menu_items').insert({
             category: item.category,
             name: item.name,
-            price_inr: item.price_inr,
+            price_inr: priceToUse,
             is_active: true
           });
           if (err2) {
