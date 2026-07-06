@@ -220,11 +220,34 @@ export default function AnalyticsDashboard({ user, onNavigateToCashier }: Analyt
     setSqlColumns([]);
     setQueryResultData(null);
 
+    const supabase = getSupabaseClient();
+    let db_data: any = null;
+
+    if (supabase) {
+      try {
+        const [ordersRes, menuItemsRes, orderItemsRes, customersRes] = await Promise.all([
+          supabase.from('orders').select('*').limit(200),
+          supabase.from('menu_items').select('*'),
+          supabase.from('order_items').select('*').limit(300),
+          supabase.from('customers').select('*').limit(200)
+        ]);
+
+        db_data = {
+          orders: ordersRes.data || [],
+          menu_items: menuItemsRes.data || [],
+          order_items: orderItemsRes.data || [],
+          customers: customersRes.data || []
+        };
+      } catch (dbErr) {
+        console.warn('Could not pre-fetch Supabase tables for dynamic query execution:', dbErr);
+      }
+    }
+
     try {
       const response = await fetch('/api/analyze-query', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: analystQuestion }),
+        body: JSON.stringify({ question: analystQuestion, db_data }),
       });
 
       const resData = await response.json();

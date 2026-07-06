@@ -167,7 +167,7 @@ app.post('/api/parse-order', async (req: Request, res: Response): Promise<void> 
  * providing a detailed explanation and simulated database execution rows matching the schema.
  */
 app.post('/api/analyze-query', async (req: Request, res: Response): Promise<void> => {
-  const { question } = req.body;
+  const { question, db_data } = req.body;
 
   if (!question || typeof question !== 'string') {
     res.status(400).json({ error: 'Please provide a valid "question" in the request body.' });
@@ -183,8 +183,8 @@ app.post('/api/analyze-query', async (req: Request, res: Response): Promise<void
   }
 
   try {
-    console.log('Generating business performance SELECT query & mock records using Gemini...');
-    const prompt = `You are a brilliant business data analyst for SliceMatic pizza shop. 
+    console.log('Generating business performance SELECT query & mock/real records using Gemini...');
+    let prompt = `You are a brilliant business data analyst for SliceMatic pizza shop. 
 Your target database is PostgreSQL. You have access to the following table schemas:
 
 1. orders (id, created_at, customer_name, customer_phone, quantity, subtotal, discount_amount, gst_amount, final_total, payment_mode, order_source, order_status)
@@ -192,13 +192,30 @@ Your target database is PostgreSQL. You have access to the following table schem
 3. order_line_items (id, order_id, base_id, pizza_id, topping_id)
 
 Given the user's natural language question: "${question}"
-Your job is to generate a valid, highly efficient PostgreSQL SELECT query that extracts the answer, explain it briefly, and provide a realistic set of query output rows representing the data that would be returned from a populated SliceMatic database.
+Your job is to generate a valid, highly efficient PostgreSQL SELECT query that extracts the answer, explain it briefly, and provide the query output rows.
 
 CRITICAL RULES:
 - Only generate SELECT queries. Never generate INSERT, UPDATE, DELETE, or DROP operations.
 - Assume Sunday=0 and Saturday=6 for date parts if weekend queries are requested.
 - Ensure columns and tables exist strictly in the schema list above.
+`;
 
+    if (db_data) {
+      prompt += `
+CRITICAL: The user has their real live Supabase database connected!
+Here is the actual, real-time data currently fetched from their database tables:
+${JSON.stringify(db_data, null, 2)}
+
+Because you have access to their real data, you MUST analyze this dataset, execute the SQL query logic in-memory over these actual rows, and return the REAL query results in the "simulated_results" array.
+Do not invent mock data. "simulated_results" must contain the exact computed result rows of running your SQL query against the real tables provided above.
+`;
+    } else {
+      prompt += `
+Since there is no live database connected, please provide a realistic set of query output rows representing the data that would be returned from a populated SliceMatic database.
+`;
+    }
+
+    prompt += `
 You MUST return a JSON object strictly adhering to this schema:
 {
   "sql": "The raw PostgreSQL SELECT query string. Do not wrap in markdown backticks or include any extra commentary.",
@@ -209,7 +226,7 @@ You MUST return a JSON object strictly adhering to this schema:
     ...
   ]
 }
-Make sure all keys match precisely. "simulated_results" must be a list of 2 to 6 realistic objects matching the columns array.`;
+Make sure all keys match precisely. "simulated_results" must be a list of realistic objects matching the columns array. If no rows are found, return an empty array.`;
 
     const response = await aiClient.models.generateContent({
       model: 'gemini-3.5-flash',
@@ -230,7 +247,7 @@ Make sure all keys match precisely. "simulated_results" must be a list of 2 to 6
             simulated_results: {
               type: Type.ARRAY,
               items: { type: Type.OBJECT },
-              description: 'Simulated output rows'
+              description: 'Real computed output rows or simulated output rows'
             }
           }
         }

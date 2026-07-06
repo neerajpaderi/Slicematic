@@ -124,7 +124,7 @@ async function resolveMenuItemId(
 
     const menuItemShapes = [
       {
-        name: 'Standard (price + item_code)',
+        name: 'Standard (price + item_code + is_active)',
         data: {
           category,
           name: cleanedName,
@@ -134,7 +134,7 @@ async function resolveMenuItemId(
         }
       },
       {
-        name: 'Standard without code (price)',
+        name: 'Standard without code (price + is_active)',
         data: {
           category,
           name: cleanedName,
@@ -143,7 +143,7 @@ async function resolveMenuItemId(
         }
       },
       {
-        name: 'Legacy (price_inr + item_code)',
+        name: 'Legacy (price_inr + item_code + is_active)',
         data: {
           category,
           name: cleanedName,
@@ -153,12 +153,46 @@ async function resolveMenuItemId(
         }
       },
       {
-        name: 'Legacy without code (price_inr)',
+        name: 'Legacy without code (price_inr + is_active)',
         data: {
           category,
           name: cleanedName,
           price_inr: price,
           is_active: true
+        }
+      },
+      {
+        name: 'Minimal price_inr with item_code (no is_active)',
+        data: {
+          category,
+          name: cleanedName,
+          price_inr: price,
+          item_code: randomCode
+        }
+      },
+      {
+        name: 'Minimal price with item_code (no is_active)',
+        data: {
+          category,
+          name: cleanedName,
+          price,
+          item_code: randomCode
+        }
+      },
+      {
+        name: 'Absolute Minimum (price_inr)',
+        data: {
+          category,
+          name: cleanedName,
+          price_inr: price
+        }
+      },
+      {
+        name: 'Absolute Minimum (price)',
+        data: {
+          category,
+          name: cleanedName,
+          price
         }
       }
     ];
@@ -264,20 +298,31 @@ export async function submitOrder(
     try {
       const customerData = {
         phone,
-        name: input.customerName.trim(),
+        name: input.customerName.trim() || 'Guest',
       };
-      // Try upsert first
-      const { error: upsertErr } = await supabase
+      
+      const { data: existingCustomer, error: findErr } = await supabase
         .from('customers')
-        .upsert(customerData, { onConflict: 'phone' });
+        .select('phone')
+        .eq('phone', phone)
+        .maybeSingle();
 
-      if (upsertErr) {
-        console.warn('Customer upsert failed, trying insert:', upsertErr.message);
+      if (findErr) {
+        console.warn('Error checking existing customer:', findErr.message);
+      }
+
+      if (!existingCustomer) {
         const { error: insertErr } = await supabase
           .from('customers')
           .insert([customerData]);
         if (insertErr) {
-          console.warn('Customer insert also failed (might already exist or table missing):', insertErr.message);
+          console.warn('Customer insertion failed (trying upsert as fallback):', insertErr.message);
+          const { error: upsertErr } = await supabase
+            .from('customers')
+            .upsert(customerData, { onConflict: 'phone' });
+          if (upsertErr) {
+            console.warn('Customer upsert also failed:', upsertErr.message);
+          }
         }
       }
     } catch (custErr) {
@@ -296,7 +341,57 @@ export async function submitOrder(
 
     const shapes = [
       {
-        name: 'Normalized (discount_amount, gst_amount)',
+        name: 'Normalized (discount_amount, gst_amount, payment_mode)',
+        data: {
+          customer_phone: phone,
+          quantity: qty,
+          subtotal: sub,
+          discount_amount: disc,
+          gst_amount: gstVal,
+          final_total: finalVal,
+          payment_mode: input.paymentMode,
+        }
+      },
+      {
+        name: 'Normalized (discount_amount, gst_amount, payment_mode, customer_name)',
+        data: {
+          customer_phone: phone,
+          customer_name: input.customerName.trim(),
+          quantity: qty,
+          subtotal: sub,
+          discount_amount: disc,
+          gst_amount: gstVal,
+          final_total: finalVal,
+          payment_mode: input.paymentMode,
+        }
+      },
+      {
+        name: 'Normalized (discount, gst, payment_mode)',
+        data: {
+          customer_phone: phone,
+          quantity: qty,
+          subtotal: sub,
+          discount: disc,
+          gst: gstVal,
+          final_total: finalVal,
+          payment_mode: input.paymentMode,
+        }
+      },
+      {
+        name: 'Normalized (discount, gst, payment_mode, customer_name)',
+        data: {
+          customer_phone: phone,
+          customer_name: input.customerName.trim(),
+          quantity: qty,
+          subtotal: sub,
+          discount: disc,
+          gst: gstVal,
+          final_total: finalVal,
+          payment_mode: input.paymentMode,
+        }
+      },
+      {
+        name: 'Normalized (discount_amount, gst_amount, NO payment_mode)',
         data: {
           customer_phone: phone,
           quantity: qty,
@@ -307,7 +402,7 @@ export async function submitOrder(
         }
       },
       {
-        name: 'Normalized (discount, gst)',
+        name: 'Normalized (discount, gst, NO payment_mode)',
         data: {
           customer_phone: phone,
           quantity: qty,
@@ -348,19 +443,30 @@ export async function submitOrder(
         }
       },
       {
-        name: 'Barebones (customer_phone)',
+        name: 'Barebones (customer_phone, payment_mode)',
         data: {
           customer_phone: phone,
+          payment_mode: input.paymentMode,
           quantity: qty,
           subtotal: sub,
           final_total: finalVal,
         }
       },
       {
-        name: 'Barebones (customer_name)',
+        name: 'Barebones (customer_name, payment_mode)',
         data: {
           customer_name: input.customerName.trim(),
           customer_phone: phone,
+          payment_mode: input.paymentMode,
+          quantity: qty,
+          subtotal: sub,
+          final_total: finalVal,
+        }
+      },
+      {
+        name: 'Absolute Minimum (payment_mode)',
+        data: {
+          payment_mode: input.paymentMode,
           quantity: qty,
           subtotal: sub,
           final_total: finalVal,

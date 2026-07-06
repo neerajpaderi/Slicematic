@@ -62,7 +62,7 @@ export async function authenticateStaff(username: string, password: string): Pro
     const firstAttempt = await supabase
       .from('staff_users')
       .select('username, password, role')
-      .eq('username', username.trim())
+      .ilike('username', username.trim())
       .maybeSingle();
 
     if (firstAttempt.error) {
@@ -80,7 +80,7 @@ export async function authenticateStaff(username: string, password: string): Pro
         const secondAttempt = await supabase
           .from('staff_users')
           .select('username, password_hash, role')
-          .eq('username', username.trim())
+          .ilike('username', username.trim())
           .maybeSingle();
         
         if (secondAttempt.error) {
