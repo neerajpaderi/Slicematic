@@ -947,5 +947,14 @@ CREATE POLICY "Enable all ops" ON order_status FOR ALL USING (true) WITH CHECK (
 CREATE POLICY "Enable all ops" ON inventory FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Enable all ops" ON menu_item_ingredients FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Enable all ops" ON inventory_transactions FOR ALL USING (true) WITH CHECK (true);
+
+-- =========================================================================
+-- 11. GRANT PERMISSIONS ON SCHEMAS, TABLES, AND SEQUENCES (FOR API ACCESS)
+-- =========================================================================
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
 `;
 }

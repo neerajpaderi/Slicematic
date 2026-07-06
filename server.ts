@@ -278,6 +278,16 @@ Make sure all keys match precisely. "simulated_results" must be a list of realis
   }
 });
 
+/**
+ * API Endpoint: Fetch Supabase configuration from server environment variables if configured
+ */
+app.get('/api/supabase-config', (req: Request, res: Response) => {
+  res.json({
+    url: process.env.SUPABASE_URL || '',
+    key: process.env.SUPABASE_ANON_KEY || ''
+  });
+});
+
 // Setup dev server with Vite or production file serving
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {

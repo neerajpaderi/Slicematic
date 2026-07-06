@@ -21,7 +21,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { authenticateStaff } from './lib/authService';
-import { getSupabaseStatus, saveSupabaseConfig } from './lib/supabaseClient';
+import { getSupabaseStatus, saveSupabaseConfig, testSupabaseConnection, setServerSupabaseConfig } from './lib/supabaseClient';
 
 // Import our newly created modular subcomponents
 import TableOrdering from './components/TableOrdering';
@@ -46,6 +46,8 @@ export default function App() {
   const [dbKey, setDbKey] = useState('');
   const [showDbConfig, setShowDbConfig] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
+  const [testingConnection, setTestingConnection] = useState(false);
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
   // Table selector state on Landing
   const [inputTableId, setInputTableId] = useState('1');
@@ -84,11 +86,46 @@ export default function App() {
       }
     }
 
-    const status = getSupabaseStatus();
-    if (status.configured) {
-      setDbUrl(status.url);
-      setDbKey(status.rawKey || '');
-    }
+    // Try to load any backend environment configurations
+    const loadServerConfig = async () => {
+      try {
+        const response = await fetch('/api/supabase-config');
+        if (response.ok) {
+          const config = await response.json();
+          if (config.url && config.key) {
+            setServerSupabaseConfig(config.url, config.key);
+            
+            // Re-fetch status now that we have injected server config
+            const status = getSupabaseStatus();
+            setSupabaseStatus(status);
+
+            const storedUrl = localStorage.getItem('slicematic_supabase_url');
+            const storedKey = localStorage.getItem('slicematic_supabase_key');
+
+            if (storedUrl !== config.url || storedKey !== config.key) {
+              localStorage.setItem('slicematic_supabase_url', config.url);
+              localStorage.setItem('slicematic_supabase_key', config.key);
+              // Clean page reload so all modules boot up with the fresh Supabase client immediately!
+              window.location.reload();
+              return;
+            }
+            
+            setDbUrl(config.url);
+            setDbKey(config.key);
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to auto-fetch server Supabase credentials:', err);
+      }
+    };
+
+    loadServerConfig().then(() => {
+      const status = getSupabaseStatus();
+      if (status.configured) {
+        setDbUrl(status.url);
+        setDbKey(status.rawKey || '');
+      }
+    });
   }, []);
 
   // Login handler
@@ -146,6 +183,7 @@ export default function App() {
   const handleSaveSupabaseCredentials = (e: React.FormEvent) => {
     e.preventDefault();
     setSaveMessage('');
+    setTestResult(null);
 
     saveSupabaseConfig(dbUrl, dbKey);
     const newStatus = getSupabaseStatus();
@@ -162,6 +200,24 @@ export default function App() {
       setShowDbConfig(false);
     }, 3000);
   };
+
+  // Test Supabase connection handler
+  const handleTestConnection = async () => {
+    setTestingConnection(true);
+    setTestResult(null);
+    try {
+      const res = await testSupabaseConnection(dbUrl, dbKey);
+      setTestResult(res);
+    } catch (err: any) {
+      setTestResult({
+        success: false,
+        message: `Connection check failed: ${err.message || err}`
+      });
+    } finally {
+      setTestingConnection(false);
+    }
+  };
+
 
   // ---------------------------------------------------------------------------
   // ROUTER CONTROLLER (Route parser)
@@ -480,30 +536,61 @@ export default function App() {
                   </div>
                 )}
 
-                <div className="flex gap-2 pt-3">
+                {testResult && (
+                  <div className={`p-2.5 border text-xs rounded-lg flex flex-col gap-1 ${
+                    testResult.success 
+                      ? 'bg-emerald-950/80 border-emerald-800 text-emerald-200' 
+                      : 'bg-rose-950/80 border-rose-800 text-rose-200'
+                  }`}>
+                    <div className="flex items-center gap-1.5 font-semibold">
+                      {testResult.success ? (
+                        <Sparkles className="h-4 w-4 shrink-0 text-emerald-400 animate-pulse" />
+                      ) : (
+                        <AlertCircle className="h-4 w-4 shrink-0 text-rose-400" />
+                      )}
+                      <span>{testResult.success ? 'Test Succeeded!' : 'Test Failed'}</span>
+                    </div>
+                    <span className="text-[11px] leading-relaxed opacity-90 whitespace-pre-wrap">{testResult.message}</span>
+                  </div>
+                )}
+
+                <div className="flex flex-col gap-2 pt-3">
                   <button
                     type="button"
-                    onClick={() => {
-                      setDbUrl('');
-                      setDbKey('');
-                      saveSupabaseConfig('', '');
-                      setSupabaseStatus(getSupabaseStatus());
-                      setSaveMessage('Credentials cleared. Running local fallback.');
-                      setTimeout(() => {
-                        setSaveMessage('');
-                        setShowDbConfig(false);
-                      }, 2000);
-                    }}
-                    className="flex-1 bg-slate-800 hover:bg-slate-750 text-slate-300 py-2 rounded-xl text-xs font-semibold cursor-pointer"
+                    onClick={handleTestConnection}
+                    disabled={testingConnection || !dbUrl || !dbKey}
+                    className="w-full bg-slate-800 hover:bg-slate-750 disabled:opacity-40 text-slate-200 py-2 rounded-xl text-xs font-semibold cursor-pointer flex items-center justify-center gap-1.5 border border-slate-700"
                   >
-                    Clear Credentials
+                    <RefreshCw className={`h-3 w-3 ${testingConnection ? 'animate-spin' : ''}`} />
+                    {testingConnection ? 'Testing Access...' : 'Test Connection'}
                   </button>
-                  <button
-                    type="submit"
-                    className="flex-1 bg-amber-500 hover:bg-amber-400 text-slate-950 py-2 rounded-xl text-xs font-bold shadow cursor-pointer"
-                  >
-                    Save Changes
-                  </button>
+
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDbUrl('');
+                        setDbKey('');
+                        setTestResult(null);
+                        saveSupabaseConfig('', '');
+                        setSupabaseStatus(getSupabaseStatus());
+                        setSaveMessage('Credentials cleared. Running local fallback.');
+                        setTimeout(() => {
+                          setSaveMessage('');
+                          setShowDbConfig(false);
+                        }, 2000);
+                      }}
+                      className="flex-1 bg-slate-900 hover:bg-slate-850 text-slate-400 py-2 rounded-xl text-xs font-semibold cursor-pointer border border-slate-800"
+                    >
+                      Clear Credentials
+                    </button>
+                    <button
+                      type="submit"
+                      className="flex-1 bg-amber-500 hover:bg-amber-400 text-slate-950 py-2 rounded-xl text-xs font-bold shadow cursor-pointer"
+                    >
+                      Save Changes
+                    </button>
+                  </div>
                 </div>
               </form>
             </motion.div>

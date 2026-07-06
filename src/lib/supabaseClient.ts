@@ -5,6 +5,18 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
+let serverUrl = '';
+let serverKey = '';
+
+/**
+ * Dynamically registers backend-injected Supabase credentials at runtime.
+ */
+export function setServerSupabaseConfig(url: string, key: string) {
+  serverUrl = url || '';
+  serverKey = key || '';
+  clientInstance = null; // Force client recreation
+}
+
 // Keys can be provided in the environment (VITE_ prefix for client side access)
 // or customized directly in the application's visual settings block.
 const getSupabaseConfig = () => {
@@ -15,9 +27,9 @@ const getSupabaseConfig = () => {
   const localKey = localStorage.getItem('slicematic_supabase_key');
 
   return {
-    url: localUrl || envUrl || '',
-    key: localKey || envKey || '',
-    isCustom: !!(localUrl && localKey),
+    url: localUrl || serverUrl || envUrl || '',
+    key: localKey || serverKey || envKey || '',
+    isCustom: !!(localUrl && localKey) || !!(serverUrl && serverKey),
   };
 };
 
@@ -75,3 +87,64 @@ export function saveSupabaseConfig(url: string, key: string) {
   // Clear cached instance
   clientInstance = null;
 }
+
+/**
+ * Tests direct connection/credentials against a Supabase endpoint before saving them permanently.
+ */
+export async function testSupabaseConnection(url: string, key: string): Promise<{ success: boolean; message: string }> {
+  if (!url || !key) {
+    return { success: false, message: 'Please provide both a valid URL and API Key.' };
+  }
+  try {
+    const tempClient = createClient(url.trim(), key.trim());
+    // Try performing a minimal select query on a standard table
+    const { data, error } = await tempClient.from('menu_items').select('id').limit(1);
+    
+    if (error) {
+      // If the table doesn't exist yet, but we get a PGRST116, relation error, or access denied,
+      // it means the URL and key are authentic, just that tables are missing.
+      const msg = error.message || '';
+      
+      if (msg.toLowerCase().includes('permission denied') || msg.toLowerCase().includes('schema public')) {
+        return {
+          success: false,
+          message: 'Database connection failed: "permission denied for schema public". This means your Supabase "anon" or "authenticated" role does not have USAGE/SELECT permissions on the public schema. To fix this, run the following statement in your Supabase SQL Editor and try again:\n\nGRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;\nGRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;\nGRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;\nALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;\nALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;'
+        };
+      }
+
+      if (msg.toLowerCase().includes('sequence') || msg.toLowerCase().includes('permission denied for sequence')) {
+        return {
+          success: false,
+          message: 'Database sequence permission error: "permission denied for sequence". This means your API key cannot increment SERIAL IDs (primary keys). To fix this, run the following command in your Supabase SQL Editor:\n\nGRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;\nALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;'
+        };
+      }
+
+      if (
+        error.code === 'PGRST116' || 
+        msg.includes('relation') || 
+        msg.includes('does not exist') || 
+        msg.includes('404')
+      ) {
+        return {
+          success: true,
+          message: 'Connected to Supabase! However, the "menu_items" table was not found. Please initialize the database schema in the Admin panel.'
+        };
+      }
+      return {
+        success: false,
+        message: `Database connection error: ${error.message}`
+      };
+    }
+    
+    return {
+      success: true,
+      message: 'Connection successful! Verified access to the "menu_items" table.'
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      message: `Failed to connect: ${err?.message || err}`
+    };
+  }
+}
+

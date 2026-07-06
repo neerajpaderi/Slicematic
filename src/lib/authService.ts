@@ -55,13 +55,13 @@ export async function authenticateStaff(username: string, password: string): Pro
 
   try {
     // 1. Query staff_users table in Supabase
-    // Let's first try to select username, password, role. If we get an error saying column "password" does not exist, we try to select "password_hash" instead!
+    // Let's first try to select username, password_hash, role (standard column). If we get an error saying column "password_hash" does not exist, we try to select legacy "password" instead!
     let data: any = null;
     let queryError: any = null;
 
     const firstAttempt = await supabase
       .from('staff_users')
-      .select('username, password, role')
+      .select('username, password_hash, role')
       .ilike('username', username.trim())
       .maybeSingle();
 
@@ -74,12 +74,12 @@ export async function authenticateStaff(username: string, password: string): Pro
         queryError = firstAttempt.error;
       } else if (
         errMsg.includes('column') &&
-        (errMsg.includes('password') || errMsg.includes('does not exist'))
+        (errMsg.includes('password_hash') || errMsg.includes('does not exist'))
       ) {
-        // Try password_hash instead
+        // Try legacy password instead
         const secondAttempt = await supabase
           .from('staff_users')
-          .select('username, password_hash, role')
+          .select('username, password, role')
           .ilike('username', username.trim())
           .maybeSingle();
         
@@ -162,12 +162,12 @@ export async function addStaffUser(username: string, password: string, role: 'ca
   }
 
   try {
-    // Try using 'password' first
+    // Try using 'password_hash' first as it matches our official schema
     const firstInsert = await supabase
       .from('staff_users')
       .insert({
         username: trimmedUser,
-        password: trimmedPass,
+        password_hash: trimmedPass,
         role
       });
 
@@ -175,14 +175,14 @@ export async function addStaffUser(username: string, password: string, role: 'ca
       const errMsg = firstInsert.error.message || '';
       if (
         errMsg.includes('column') &&
-        (errMsg.includes('password') || errMsg.includes('does not exist'))
+        (errMsg.includes('password_hash') || errMsg.includes('does not exist'))
       ) {
-        // Try using 'password_hash' instead
+        // Fallback to legacy 'password' column if password_hash doesn't exist
         const secondInsert = await supabase
           .from('staff_users')
           .insert({
             username: trimmedUser,
-            password_hash: trimmedPass,
+            password: trimmedPass,
             role
           });
 
