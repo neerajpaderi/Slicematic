@@ -60,10 +60,10 @@ app.post('/api/parse-order', async (req: Request, res: Response): Promise<void> 
     return;
   }
 
-  const openRouterKey = process.env.OPENROUTER_API_KEY || process.env.OPEN_ROUTER_API_KEY;
+  const openRouterKey = process.env.OPENROUTER_API_KEY;
   
   // If OpenRouter API key is available, attempt to query OpenRouter
-  if (openRouterKey && openRouterKey !== 'MY_OPENROUTER_API_KEY' && openRouterKey !== 'MY_OPEN_ROUTER_API_KEY' && openRouterKey.trim() !== '') {
+  if (openRouterKey && openRouterKey !== 'MY_OPENROUTER_API_KEY' && openRouterKey.trim() !== '') {
     try {
       console.log('Attempting to process order using OpenRouter...');
       const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -329,8 +329,8 @@ app.post('/api/analyze-query', async (req: Request, res: Response): Promise<void
     return;
   }
 
-  const openRouterKey = process.env.OPENROUTER_API_KEY || process.env.OPEN_ROUTER_API_KEY;
-  const hasOpenRouter = openRouterKey && openRouterKey !== 'MY_OPENROUTER_API_KEY' && openRouterKey !== 'MY_OPEN_ROUTER_API_KEY' && openRouterKey.trim() !== '';
+  const openRouterKey = process.env.OPENROUTER_API_KEY;
+  const hasOpenRouter = openRouterKey && openRouterKey !== 'MY_OPENROUTER_API_KEY' && openRouterKey.trim() !== '';
 
   if (!hasOpenRouter && !aiClient) {
     res.status(500).json({
