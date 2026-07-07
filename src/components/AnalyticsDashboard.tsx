@@ -19,7 +19,9 @@ import {
   AlertCircle,
   CheckCircle,
   Database,
-  ArrowLeft
+  ArrowLeft,
+  MessageSquare,
+  Trash2
 } from 'lucide-react';
 import { addStaffUser, getStaffUsers, StaffUser } from '../lib/authService';
 import { getInventory, InventoryIngredient } from '../lib/inventoryService';
@@ -57,6 +59,27 @@ export default function AnalyticsDashboard({ user, onNavigateToCashier }: Analyt
   const [analystError, setAnalystError] = useState('');
   const [copied, setCopied] = useState(false);
   const [isLiveResult, setIsLiveResult] = useState(false);
+
+  interface ChatMessage {
+    id: string;
+    sender: 'admin' | 'dough_assistant';
+    text: string;
+    timestamp: Date;
+    sql?: string | null;
+    explanation?: string | null;
+    columns?: string[];
+    simulated_results?: any[];
+  }
+
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
+    {
+      id: 'welcome',
+      sender: 'dough_assistant',
+      text: "Hi Admin! I'm Dough Assistant, your AI pizza outlet analyst. Ask me anything about our sales, inventory, low stock, staff attendance, or peak times, and I'll break it down for you in plain, simple language!",
+      timestamp: new Date()
+    }
+  ]);
+  const [expandedMessageIds, setExpandedMessageIds] = useState<Record<string, boolean>>({});
 
   // Real database stats for analytics overview
   const [stats, setStats] = useState({
@@ -211,16 +234,29 @@ export default function AnalyticsDashboard({ user, onNavigateToCashier }: Analyt
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Business Analyst SQL query helper
-  const handleAnalyzeQuery = async () => {
-    if (!analystQuestion.trim()) return;
+  // Business Analyst conversational query helper
+  const handleAnalyzeQuery = async (customText?: string) => {
+    const questionText = customText || analystQuestion;
+    if (!questionText.trim()) return;
+
+    // Clear input box
+    if (!customText) {
+      setAnalystQuestion('');
+    }
+
+    const userMessageId = Math.random().toString(36).substring(7);
+    const userMsg: ChatMessage = {
+      id: userMessageId,
+      sender: 'admin',
+      text: questionText,
+      timestamp: new Date()
+    };
+
+    const updatedMessages = [...chatMessages, userMsg];
+    setChatMessages(updatedMessages);
+
     setAnalystLoading(true);
     setAnalystError('');
-    setGeneratedSql('');
-    setSqlExplanation('');
-    setSqlColumns([]);
-    setQueryResultData(null);
-    setIsLiveResult(false);
 
     const supabase = getSupabaseClient();
     let db_data: any = null;
@@ -285,30 +321,49 @@ export default function AnalyticsDashboard({ user, onNavigateToCashier }: Analyt
     }
 
     try {
+      const messagesPayload = updatedMessages.map(m => ({
+        sender: m.sender,
+        text: m.text
+      }));
+
       const response = await fetch('/api/analyze-query', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: analystQuestion, db_data }),
+        body: JSON.stringify({ question: questionText, messages: messagesPayload, db_data }),
       });
 
       const resData = await response.json();
       if (resData.success) {
-        setGeneratedSql(resData.sql);
-        setSqlExplanation(resData.explanation);
-        setSqlColumns(resData.columns || []);
-        setQueryResultData(resData.simulated_results || []);
+        const botMsg: ChatMessage = {
+          id: Math.random().toString(36).substring(7),
+          sender: 'dough_assistant',
+          text: resData.reply || "I've analyzed the request, but didn't produce a verbal summary.",
+          timestamp: new Date(),
+          sql: resData.sql,
+          explanation: resData.explanation,
+          columns: resData.columns || [],
+          simulated_results: resData.simulated_results || []
+        };
+        setChatMessages(prev => [...prev, botMsg]);
+
+        if (resData.sql) {
+          setGeneratedSql(resData.sql);
+          setSqlExplanation(resData.explanation || '');
+          setSqlColumns(resData.columns || []);
+          setQueryResultData(resData.simulated_results || []);
+        }
       } else {
-        setAnalystError(resData.error || 'Failed to parse request.');
+        setAnalystError(resData.error || 'Failed to retrieve response from Dough Assistant.');
       }
     } catch (err: any) {
-      setAnalystError(err.message || 'Error connecting to data analysis backend services.');
+      setAnalystError(err.message || 'Error connecting to Dough Assistant backend services.');
     } finally {
       setAnalystLoading(false);
     }
   };
 
   const applyPresetQuery = (queryText: string) => {
-    setAnalystQuestion(queryText);
+    handleAnalyzeQuery(queryText);
   };
 
   return (
@@ -539,179 +594,259 @@ export default function AnalyticsDashboard({ user, onNavigateToCashier }: Analyt
           </div>
         </div>
 
-        {/* RIGHT PANEL: AI BUSINESS INTEL RECONCILIATION ANALYST (7 Columns) */}
+        {/* RIGHT PANEL: CONVERSATIONAL DOUGH ASSISTANT ANALYST (7 Columns) */}
         <div className="lg:col-span-7 space-y-6">
-          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-4">
-              <div className="flex items-center gap-2">
-                <div className="bg-indigo-50 text-indigo-700 p-1.5 rounded-lg border border-indigo-100">
-                  <Activity className="h-4 w-4" />
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 flex flex-col h-[650px] overflow-hidden">
+            {/* Chatbot Header */}
+            <div className="bg-slate-900 text-white px-5 py-4 border-b border-slate-800 flex justify-between items-center shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="bg-amber-500 text-slate-950 p-2 rounded-lg shrink-0">
+                  <MessageSquare className="h-4.5 w-4.5 font-bold" />
                 </div>
                 <div>
-                  <h3 className="font-display font-semibold text-slate-900">AI SQL Business Performance Analyst</h3>
-                  <p className="text-xs text-slate-500 font-sans">Translate complex natural language questions into raw PostgreSQL queries</p>
+                  <h3 className="font-display font-bold text-sm tracking-tight">Dough Assistant</h3>
+                  <p className="text-[10px] text-slate-400 font-sans mt-0.5 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                    AI Outlet Business Analyst
+                  </p>
                 </div>
               </div>
-            </div>
-
-            <div className="flex flex-col md:flex-row gap-3">
-              <input
-                type="text"
-                value={analystQuestion}
-                onChange={(e) => setAnalystQuestion(e.target.value)}
-                placeholder="e.g. Compare gross earnings across cash vs UPI transactions?"
-                className="flex-1 bg-slate-50 border border-slate-200 rounded-xl py-3 px-4 text-sm focus:bg-white focus:outline-none transition font-sans text-slate-800 font-medium"
-              />
 
               <button
-                onClick={handleAnalyzeQuery}
-                disabled={analystLoading || !analystQuestion.trim()}
-                className="bg-slate-950 hover:bg-slate-850 disabled:bg-slate-100 text-white disabled:text-slate-400 px-5 py-3 rounded-xl font-semibold text-sm transition flex items-center justify-center gap-1.5 cursor-pointer"
+                type="button"
+                onClick={() => {
+                  setChatMessages([
+                    {
+                      id: 'welcome',
+                      sender: 'dough_assistant',
+                      text: "Hi Admin! I'm Dough Assistant, your AI pizza outlet analyst. Ask me anything about our sales, inventory, low stock, staff attendance, or peak times, and I'll break it down for you in plain, simple language!",
+                      timestamp: new Date()
+                    }
+                  ]);
+                  setGeneratedSql('');
+                  setQueryResultData(null);
+                }}
+                className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold px-2.5 py-1.5 rounded-lg border border-slate-700 transition flex items-center gap-1 cursor-pointer font-mono"
+                title="Clear Chat Logs"
               >
-                {analystLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4 text-amber-400" />}
-                <span>Audit Question</span>
+                <Trash2 className="h-3 w-3 text-rose-400" />
+                <span>Clear Chat</span>
               </button>
             </div>
 
-            {/* Presets */}
-            <div className="mt-4 flex flex-wrap gap-2">
-              <span className="text-[10px] text-slate-400 uppercase font-mono font-bold shrink-0 mt-1.5 mr-1">Prompts:</span>
-              {[
-                "Calculate average discount amount on orders with quantity over 5?",
-                "Find most popular toppings and count occurrences?",
-                "Which payment mode generated the largest total sales volume?"
-              ].map((preset, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => applyPresetQuery(preset)}
-                  className="text-[11px] bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 px-2.5 py-1 rounded-lg transition font-medium text-left truncate max-w-[240px] cursor-pointer"
-                >
-                  {preset}
-                </button>
-              ))}
-            </div>
-          </div>
+            {/* Chat Message Window */}
+            <div className="flex-1 p-5 overflow-y-auto bg-slate-50/50 space-y-4">
+              {chatMessages.map((msg) => {
+                const isAdmin = msg.sender === 'admin';
+                const hasDetails = !!msg.sql;
+                const isExpanded = !!expandedMessageIds[msg.id];
 
-          {analystError && (
-            <div className="bg-rose-50 border border-rose-200 text-rose-800 p-4 rounded-xl text-xs flex gap-2">
-              <AlertCircle className="h-4.5 w-4.5 text-rose-600 shrink-0 mt-0.5" />
-              <div>
-                <p className="font-semibold">Query Translator Failure</p>
-                <p className="mt-0.5">{analystError}</p>
-              </div>
-            </div>
-          )}
-
-          {/* QUERY TRANSLATION BINDINGS */}
-          {(generatedSql || queryResultData) && (
-            <div className="space-y-6">
-              {/* Generated SQL terminal box */}
-              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-                <div className="bg-slate-900 border-b border-slate-800 px-5 py-3 flex items-center justify-between text-white text-xs">
-                  <div className="flex items-center gap-1.5">
-                    <span className="bg-pink-500 text-slate-950 px-1.5 py-0.5 rounded font-mono text-[9px] font-bold">SQL COMPILER</span>
-                    <span className="font-mono text-slate-300">Generated Query</span>
-                  </div>
-
-                  <button
-                    onClick={handleCopySql}
-                    className="text-slate-400 hover:text-white transition flex items-center gap-1 text-[11px] bg-slate-800 px-2.5 py-1 rounded border border-slate-700 cursor-pointer"
+                return (
+                  <div
+                    key={msg.id}
+                    className={`flex flex-col ${isAdmin ? 'items-end' : 'items-start'} space-y-1`}
                   >
-                    <Copy className="h-3.5 w-3.5" />
-                    <span>{copied ? 'Copied' : 'Copy SQL'}</span>
-                  </button>
-                </div>
+                    <div className="text-[9px] font-bold text-slate-400 px-1 font-mono">
+                      {isAdmin ? 'Owner (Admin)' : 'Dough Assistant'} • {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </div>
 
-                <div className="bg-slate-950 p-5">
-                  <pre className="font-mono text-xs text-slate-300 whitespace-pre-wrap max-h-[220px] overflow-y-auto leading-relaxed">
-                    <code>{generatedSql}</code>
-                  </pre>
-                </div>
+                    <div
+                      className={`px-4 py-3 rounded-2xl text-xs max-w-[90%] shadow-sm leading-relaxed ${
+                        isAdmin
+                          ? 'bg-amber-500 text-slate-950 font-semibold rounded-tr-none'
+                          : 'bg-white border border-slate-200/80 text-slate-800 rounded-tl-none'
+                      }`}
+                    >
+                      {/* Message Content */}
+                      <p className="whitespace-pre-wrap font-sans font-medium">{msg.text}</p>
 
-                {sqlExplanation && (
-                  <div className="bg-slate-50 border-t border-slate-100 p-4">
-                    <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">Business Objective Explanation</h4>
-                    <p className="text-xs text-slate-600 leading-relaxed font-medium mt-0.5">{sqlExplanation}</p>
-                  </div>
-                )}
-              </div>
+                      {/* Expandable Technical details if generated SQL query exists */}
+                      {!isAdmin && hasDetails && (
+                        <div className="mt-3 pt-2.5 border-t border-slate-100 space-y-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setExpandedMessageIds(prev => ({ ...prev, [msg.id]: !prev[msg.id] }));
+                            }}
+                            className="flex items-center gap-1.5 text-[10px] text-indigo-600 hover:text-indigo-800 font-bold font-mono transition"
+                          >
+                            <Activity className="h-3.5 w-3.5" />
+                            <span>{isExpanded ? 'Hide SQL & Database Audit Details' : 'Show SQL & Database Audit Details'}</span>
+                          </button>
 
-              {/* Data Visualization simulation */}
-              {queryResultData && queryResultData.length > 0 && (
-                <div className="bg-white rounded-2xl border border-slate-200 p-5 space-y-4">
-                  <div className="border-b border-slate-100 pb-2.5 flex justify-between items-center text-xs">
-                    <h4 className="font-mono font-bold text-slate-400 uppercase">Compiled Return Dataset</h4>
-                    <span className="bg-emerald-50 text-emerald-700 font-bold px-2 py-0.5 rounded border border-emerald-100 text-[10px]">
-                      {isLiveResult ? 'LIVE REAL-TIME DATABASE RESULTS' : 'SIMULATED EXECUTION'}
-                    </span>
-                  </div>
+                          {isExpanded && (
+                            <div className="bg-slate-50 rounded-xl p-3 border border-slate-150 space-y-3 mt-2 animate-fadeIn text-slate-800">
+                              {/* SQL Code Block */}
+                              <div className="space-y-1">
+                                <div className="flex justify-between items-center text-[9px] font-bold text-slate-400 font-mono">
+                                  <span>POSTGRESQL SELECT QUERY:</span>
+                                  <button
+                                    onClick={() => {
+                                      if (msg.sql) {
+                                        navigator.clipboard.writeText(msg.sql);
+                                        alert('SQL copied successfully!');
+                                      }
+                                    }}
+                                    className="text-indigo-600 hover:text-indigo-800 flex items-center gap-0.5"
+                                  >
+                                    <Copy className="h-3 w-3" />
+                                    <span>Copy</span>
+                                  </button>
+                                </div>
+                                <pre className="font-mono text-[10px] bg-slate-950 text-slate-300 p-2.5 rounded-lg overflow-x-auto whitespace-pre leading-normal">
+                                  <code>{msg.sql}</code>
+                                </pre>
+                              </div>
 
-                  <div className="overflow-x-auto rounded-xl border border-slate-100">
-                    <table className="w-full text-left border-collapse text-xs">
-                      <thead>
-                        <tr className="bg-slate-50 border-b border-slate-100 font-mono text-slate-400 uppercase">
-                          {sqlColumns.map((col) => (
-                            <th key={col} className="p-2.5 font-semibold text-[10px]">{col.replace(/_/g, ' ')}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {queryResultData.map((row, i) => (
-                          <tr key={i} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/50">
-                            {sqlColumns.map((col) => {
-                              const val = row[col];
-                              let showVal = val != null ? String(val) : '-';
-                              if (typeof val === 'number') {
-                                if (col.includes('total') || col.includes('discount') || col.includes('gst') || col.includes('subtotal') || col.includes('revenue') || col.includes('price')) {
-                                  showVal = `₹${val.toFixed(2)}`;
-                                }
-                              }
-                              return <td key={col} className="p-2.5 font-mono text-slate-700 font-medium">{showVal}</td>;
-                            })}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                              {/* Explanation */}
+                              {msg.explanation && (
+                                <div className="bg-indigo-50/50 border border-indigo-100/60 rounded-lg p-2 text-[10px] text-indigo-950">
+                                  <span className="font-bold">Objective:</span> {msg.explanation}
+                                </div>
+                              )}
 
-                  {/* Stat Report bar chart fallback */}
-                  <div className="bg-slate-50 rounded-xl p-4 border border-slate-100">
-                    <h5 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono mb-3">Auditing Visualization Bar</h5>
-                    <div className="space-y-2.5">
-                      {queryResultData.slice(0, 3).map((row, idx) => {
-                        const numericCol = sqlColumns.find(c => typeof row[c] === 'number');
-                        const labelCol = sqlColumns[0];
-                        const label = row[labelCol] != null ? String(row[labelCol]) : `Row ${idx + 1}`;
-                        const val = numericCol ? row[numericCol] : 1;
-                        
-                        const maxVal = Math.max(...queryResultData.map(r => {
-                          const nc = sqlColumns.find(c => typeof r[c] === 'number');
-                          return nc ? r[nc] : 1;
-                        }), 1);
-                        
-                        const percentage = Math.min(100, Math.max(15, (val / maxVal) * 100));
+                              {/* Live/Simulated result columns and data table */}
+                              {msg.columns && msg.columns.length > 0 && msg.simulated_results && msg.simulated_results.length > 0 && (
+                                <div className="space-y-2">
+                                  <div className="flex justify-between items-center text-[9px] font-bold text-slate-400 font-mono border-b border-slate-200 pb-1">
+                                    <span>DATABASE RETURNSET:</span>
+                                    <span className="bg-emerald-50 text-emerald-700 font-bold px-1.5 py-0.5 rounded border border-emerald-100 text-[8px]">
+                                      {isLiveResult ? 'REAL-TIME DB SYNC' : 'SIMULATED DATA'}
+                                    </span>
+                                  </div>
 
-                        return (
-                          <div key={idx} className="space-y-1">
-                            <div className="flex justify-between text-xs font-semibold text-slate-600">
-                              <span className="truncate max-w-[70%]">{label}</span>
-                              <span className="font-mono text-slate-900">
-                                {numericCol && (numericCol.includes('total') || numericCol.includes('subtotal') || numericCol.includes('price')) ? `₹${val.toFixed(2)}` : val}
-                              </span>
+                                  <div className="overflow-x-auto rounded-lg border border-slate-100 max-h-48">
+                                    <table className="w-full text-left border-collapse text-[10px]">
+                                      <thead>
+                                        <tr className="bg-slate-100 border-b border-slate-250 font-mono text-slate-500 uppercase">
+                                          {msg.columns.map((col) => (
+                                            <th key={col} className="p-2 font-bold">{col.replace(/_/g, ' ')}</th>
+                                          ))}
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {msg.simulated_results.map((row, i) => (
+                                          <tr key={i} className="border-b border-slate-50 last:border-0 bg-white hover:bg-slate-50/50">
+                                            {msg.columns!.map((col) => {
+                                              const val = row[col];
+                                              let showVal = val != null ? String(val) : '-';
+                                              if (typeof val === 'number') {
+                                                if (col.includes('total') || col.includes('discount') || col.includes('gst') || col.includes('subtotal') || col.includes('revenue') || col.includes('price')) {
+                                                  showVal = `₹${val.toFixed(2)}`;
+                                                }
+                                              }
+                                              return <td key={col} className="p-2 font-mono text-slate-700 font-medium">{showVal}</td>;
+                                            })}
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+
+                                  {/* Micro visualizer chart */}
+                                  <div className="bg-white border border-slate-100 rounded-lg p-2 space-y-1.5">
+                                    <p className="text-[8px] font-bold text-slate-400 uppercase tracking-wider font-mono">Micro Bar chart</p>
+                                    <div className="space-y-1.5">
+                                      {msg.simulated_results.slice(0, 3).map((row, idx) => {
+                                        const numericCol = msg.columns!.find(c => typeof row[c] === 'number');
+                                        const labelCol = msg.columns![0];
+                                        const label = row[labelCol] != null ? String(row[labelCol]) : `Row ${idx + 1}`;
+                                        const val = numericCol ? row[numericCol] : 1;
+
+                                        const maxVal = Math.max(...msg.simulated_results!.map(r => {
+                                          const nc = msg.columns!.find(c => typeof r[c] === 'number');
+                                          return nc ? r[nc] : 1;
+                                        }), 1);
+
+                                        const percentage = Math.min(100, Math.max(15, (val / maxVal) * 100));
+
+                                        return (
+                                          <div key={idx} className="space-y-0.5">
+                                            <div className="flex justify-between text-[9px] text-slate-500 font-medium">
+                                              <span className="truncate max-w-[70%]">{label}</span>
+                                              <span className="font-mono text-slate-800">
+                                                {numericCol && (numericCol.includes('total') || numericCol.includes('subtotal') || numericCol.includes('price')) ? `₹${val.toFixed(2)}` : val}
+                                              </span>
+                                            </div>
+                                            <div className="w-full bg-slate-100 h-1 rounded-full overflow-hidden">
+                                              <div className="bg-amber-400 h-full rounded-full" style={{ width: `${percentage}%` }} />
+                                            </div>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+
+                                </div>
+                              )}
                             </div>
-                            <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden">
-                              <div className="bg-amber-400 h-full rounded-full" style={{ width: `${percentage}%` }} />
-                            </div>
-                          </div>
-                        );
-                      })}
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
+                );
+              })}
 
+              {analystError && (
+                <div className="bg-rose-50 border border-rose-200 text-rose-800 p-4 rounded-xl text-xs flex gap-2">
+                  <AlertCircle className="h-4.5 w-4.5 text-rose-600 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-semibold">Query Translator Failure</p>
+                    <p className="mt-0.5 text-slate-600">{analystError}</p>
+                  </div>
                 </div>
               )}
             </div>
-          )}
+
+            {/* Chatbot Footer Input */}
+            <div className="p-4 border-t border-slate-200 bg-white shrink-0 space-y-3">
+              {/* Prompt Presets */}
+              <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto py-0.5">
+                <span className="text-[9px] text-slate-400 uppercase font-mono font-bold shrink-0 mt-1.5 mr-1">Suggestions:</span>
+                {[
+                  "Calculate average discount amount on orders?",
+                  "Which toppings are most popular?",
+                  "List ingredients with low stock?"
+                ].map((preset, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => applyPresetQuery(preset)}
+                    className="text-[10px] bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 px-2.5 py-1 rounded-lg transition font-medium text-left truncate max-w-[200px] cursor-pointer"
+                  >
+                    {preset}
+                  </button>
+                ))}
+              </div>
+
+              {/* Message input bar */}
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  handleAnalyzeQuery();
+                }}
+                className="flex gap-2"
+              >
+                <input
+                  type="text"
+                  value={analystQuestion}
+                  onChange={(e) => setAnalystQuestion(e.target.value)}
+                  placeholder="Ask Dough Assistant about low stock, peak times, sales, etc..."
+                  className="flex-1 bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-4 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-500 transition text-slate-800 font-medium"
+                />
+
+                <button
+                  type="submit"
+                  disabled={analystLoading || !analystQuestion.trim()}
+                  className="bg-slate-950 hover:bg-slate-850 disabled:bg-slate-100 text-white disabled:text-slate-400 px-4 py-2.5 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  {analystLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4 text-amber-400" />}
+                  <span>Ask</span>
+                </button>
+              </form>
+            </div>
+          </div>
         </div>
       </div>
     </div>

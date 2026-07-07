@@ -322,28 +322,84 @@ CRITICAL:
  * providing a detailed explanation and simulated database execution rows matching the schema.
  */
 app.post('/api/analyze-query', async (req: Request, res: Response): Promise<void> => {
-  const { question, db_data } = req.body;
+  const { question, messages, db_data } = req.body;
 
   if (!question || typeof question !== 'string') {
     res.status(400).json({ error: 'Please provide a valid "question" in the request body.' });
     return;
   }
 
-  if (!aiClient) {
+  const openRouterKey = process.env.OPENROUTER_API_KEY;
+  const hasOpenRouter = openRouterKey && openRouterKey !== 'MY_OPENROUTER_API_KEY' && openRouterKey.trim() !== '';
+
+  if (!hasOpenRouter && !aiClient) {
     res.status(500).json({
       success: false,
-      error: 'Google Gemini client is not initialized. Please configure your GEMINI_API_KEY in the Secrets panel.',
+      error: 'No AI service configured. Please configure GEMINI_API_KEY or OPENROUTER_API_KEY in the Secrets panel.',
     });
     return;
   }
 
   try {
-    console.log('Generating business performance SELECT query & mock/real records using Gemini...');
-    let prompt = `You are a brilliant business data analyst for SliceMatic pizza shop. 
+    console.log('Generating business performance SELECT query & mock/real records using Gemini/OpenRouter...');
+    let prompt = `
+# ROLE
+You are "Dough Assistant," the AI analyst for a pizza outlet's owner (the Admin).
+The Admin is not technical and does not know how to read dashboards, SQL, or raw
+tables — your job is to translate data into plain, actionable business insight.
+
+# WHAT YOU DO
+You analyze data from the outlet's database (inventory, employees, sales/pizza orders,
+and any other connected tables) to answer the Admin's questions about performance,
+trends, and anomalies — e.g. best-selling items, slow-moving inventory, staff
+attendance/performance, peak hours, revenue trends, wastage, etc.
+
+# DATA GROUNDING (CRITICAL)
+- Only state numbers, trends, or facts that come from actual query results returned
+  to you. Never estimate, guess, or fabricate figures.
+- If the data needed to answer isn't available or the query returns nothing useful,
+  say so plainly and suggest what data/report could help instead.
+- If a query result is ambiguous or could be interpreted multiple ways, state your
+  interpretation briefly before answering.
+
+# RESPONSE STYLE
+- Plain, simple language — no technical jargon (no "SQL," "query," "table," "null,"
+  "aggregation," etc.). Explain findings the way you'd explain them to a friend
+  running the shop, not a data engineer.
+- Lead with the direct answer/insight first, then brief supporting detail.
+- Keep responses short by default. Use bullet points or a small table only when
+  comparing multiple items (e.g. top 5 pizzas) — don't over-format simple answers.
+- End with one relevant follow-up suggestion when it adds value (e.g. "Want me to
+  check if this holds for last month too?") — don't force this every time.
+
+# SCOPE / REDIRECTION
+- If a question is outside the outlet's business data (e.g. general chit-chat,
+  unrelated topics, personal advice), politely decline and redirect: acknowledge
+  the question, then suggest a relevant business question they could ask instead.
+- If the Admin seems unsure what to ask, proactively suggest 2-3 useful things to
+  look into (e.g. "I could check today's best-seller, low-stock ingredients, or
+  yesterday's staff hours — want me to look at one of these?").
+
+# OFF-TOPIC ESCALATION
+- Track consecutive off-topic messages (not related to the business or current
+  analysis thread).
+- After 3 consecutive off-topic messages, gently flag it: "I'm best used for
+  questions about your outlet's sales, inventory, and staff — happy to help
+  whenever you're ready with one of those."
+- After 7 consecutive off-topic messages, stop redirecting each time and simply
+  give a short, friendly one-line reminder of your purpose, without re-explaining
+  fully each time, until the Admin returns to a business question.
+
+# TONE
+Warm, respectful, and confident — like a trusted shop manager giving the owner a
+quick briefing. Never condescending about the Admin's lack of technical knowledge.
+
+----------------------------------------------------------------------
+DATABASE GROUNDING & SCHEMAS:
 Your target database is PostgreSQL. You have access to the following 9 table schemas:
 
 1. customers (phone VARCHAR(10) PRIMARY KEY, name VARCHAR(40) NOT NULL, created_at TIMESTAMP)
-2. staff_users (id SERIAL PRIMARY KEY, username VARCHAR(50) UNIQUE, password_hash VARCHAR(100), role VARCHAR(20) CHECK (role IN ('cashier', 'admin')), created_at TIMESTAMP)
+2. staff_users (id SERIAL PRIMARY KEY, username VARCHAR(50) UNIQUE, password_hash VARCHAR(100), role VARCHAR(20) CHECK (role IN ('cashier', 'admin', 'kitchen')), created_at TIMESTAMP)
 3. menu_items (item_id SERIAL PRIMARY KEY, item_code VARCHAR(10) UNIQUE, category VARCHAR(10) CHECK (category IN ('base', 'pizza', 'topping')), name VARCHAR(50) UNIQUE, price NUMERIC(6,2), is_active BOOLEAN)
 4. orders (order_id SERIAL PRIMARY KEY, customer_phone VARCHAR(10) REFERENCES customers(phone), quantity INTEGER, subtotal NUMERIC(8,2), discount_amount NUMERIC(8,2), gst_amount NUMERIC(8,2), final_total NUMERIC(8,2), order_time TIMESTAMP)
 5. order_items (order_item_id SERIAL PRIMARY KEY, order_id INTEGER REFERENCES orders(order_id), item_id INTEGER REFERENCES menu_items(item_id), item_type VARCHAR(10), item_name VARCHAR(50), unit_price NUMERIC(6,2))
@@ -352,14 +408,16 @@ Your target database is PostgreSQL. You have access to the following 9 table sch
 8. inventory (inventory_id SERIAL PRIMARY KEY, ingredient_name VARCHAR(30) UNIQUE, unit VARCHAR(10), current_stock NUMERIC(8,2), reorder_threshold NUMERIC(8,2), updated_at TIMESTAMP)
 9. menu_item_ingredients (ingredient_map_id SERIAL PRIMARY KEY, item_id INTEGER REFERENCES menu_items(item_id), inventory_id INTEGER REFERENCES inventory(inventory_id), quantity_required NUMERIC(8,3))
 
-Given the user's natural language question: "${question}"
-Your job is to generate a valid, highly efficient PostgreSQL SELECT query that extracts the answer, explain it briefly, and provide the query output rows.
-
-CRITICAL RULES:
-- Only generate SELECT queries. Never generate INSERT, UPDATE, DELETE, or DROP operations.
-- Assume Sunday=0 and Saturday=6 for date parts if weekend queries are requested.
-- Ensure columns and tables exist strictly in the schema list above.
+USER NEWEST QUESTION: "${question}"
 `;
+
+    if (messages && Array.isArray(messages) && messages.length > 0) {
+      prompt += `\n\nCONVERSATION HISTORY:\n`;
+      messages.slice(-10).forEach((msg: any) => {
+        const senderLabel = msg.sender === 'admin' ? 'Admin' : 'Dough Assistant';
+        prompt += `${senderLabel}: ${msg.text}\n`;
+      });
+    }
 
     if (db_data) {
       prompt += `
@@ -379,43 +437,89 @@ Since there is no live database connected, please provide a realistic set of que
     prompt += `
 You MUST return a JSON object strictly adhering to this schema:
 {
-  "sql": "The raw PostgreSQL SELECT query string. Do not wrap in markdown backticks or include any extra commentary.",
+  "reply": "Write your friendly conversational response addressing the Admin's latest message in plain, friendly language following all instructions (especially regarding RESPONSE STYLE, SCOPE/REDIRECTION, OFF-TOPIC ESCALATION, TONE).",
+  "sql": "The raw PostgreSQL SELECT query string or null if the user message is off-topic or conversational.",
   "explanation": "A clean, friendly, jargon-free explanation (max 2 sentences) of what the SQL query evaluates.",
   "columns": ["Array of column names returned by the SELECT query in order (e.g. ['customer_name', 'final_total'])"],
   "simulated_results": [
-    {"column_name_1": "value1", "column_name_2": 150.00},
-    ...
+    {"column_name_1": "value1", "column_name_2": 150.00}
   ]
 }
-Make sure all keys match precisely. "simulated_results" must be a list of realistic objects matching the columns array. If no rows are found, return an empty array.`;
+Make sure all keys match precisely. If no query is executed, set "sql" and "explanation" to null, "columns" and "simulated_results" to empty arrays.`;
 
-    const response = await aiClient.models.generateContent({
-      model: 'gemini-3.5-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          required: ['sql', 'explanation', 'columns', 'simulated_results'],
-          properties: {
-            sql: { type: Type.STRING, description: 'Raw SELECT SQL query string' },
-            explanation: { type: Type.STRING, description: 'User-friendly business explanation' },
-            columns: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-              description: 'List of SELECT column names'
-            },
-            simulated_results: {
-              type: Type.ARRAY,
-              items: { type: Type.OBJECT },
-              description: 'Real computed output rows or simulated output rows'
+    let jsonText = '';
+    let usedSource = '';
+
+    if (hasOpenRouter) {
+      try {
+        console.log('Attempting to analyze query using OpenRouter...');
+        const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${openRouterKey}`,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': process.env.APP_URL || 'http://localhost:3000',
+            'X-Title': 'SliceMatic Pizza Business Analyst',
+          },
+          body: JSON.stringify({
+            model: 'google/gemini-2.5-flash',
+            messages: [
+              { role: 'user', content: prompt }
+            ],
+            temperature: 0.2,
+            response_format: { type: 'json_object' }
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error(`OpenRouter returned status code ${response.status}`);
+        }
+
+        const data = await response.json();
+        const content = data.choices?.[0]?.message?.content;
+        if (content) {
+          jsonText = content;
+          usedSource = 'openrouter';
+        } else {
+          throw new Error('OpenRouter response did not contain content.');
+        }
+      } catch (openRouterError: any) {
+        console.warn('OpenRouter query analysis failed, falling back to Gemini:', openRouterError.message);
+      }
+    }
+
+    if (!jsonText && aiClient) {
+      console.log('Processing query using Google Gemini client...');
+      const response = await aiClient.models.generateContent({
+        model: 'gemini-3.5-flash',
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            required: ['reply', 'sql', 'explanation', 'columns', 'simulated_results'],
+            properties: {
+              reply: { type: Type.STRING, description: 'Friendly verbal response to the Admin in plain language' },
+              sql: { type: Type.STRING, description: 'Raw SELECT SQL query string or null' },
+              explanation: { type: Type.STRING, description: 'User-friendly business explanation or null' },
+              columns: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: 'List of SELECT column names'
+              },
+              simulated_results: {
+                type: Type.ARRAY,
+                items: { type: Type.OBJECT },
+                description: 'Real computed output rows or simulated output rows'
+              }
             }
           }
         }
-      }
-    });
+      });
+      jsonText = response.text || '';
+      usedSource = 'gemini';
+    }
 
-    const jsonText = response.text;
     if (jsonText) {
       const parsed = JSON.parse(jsonText.trim());
       // Extra safety sanitization for raw SQL string
@@ -424,14 +528,15 @@ Make sure all keys match precisely. "simulated_results" must be a list of realis
       }
       res.json({
         success: true,
+        source: usedSource,
         ...parsed,
       });
       return;
     }
 
-    throw new Error('Gemini model did not return any output text.');
+    throw new Error('No AI service (OpenRouter or Gemini) returned a response.');
   } catch (err: any) {
-    console.error('Gemini query generation failed:', err);
+    console.error('Query generation failed:', err);
     res.status(500).json({
       success: false,
       error: err.message || 'Failed to generate query.',
