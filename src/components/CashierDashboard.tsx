@@ -160,7 +160,7 @@ export default function CashierDashboard({ user, onLogout, onNavigateToAnalytics
   const [customerPhone, setCustomerPhone] = useState('');
   const [selectedBase, setSelectedBase] = useState('');
   const [selectedType, setSelectedType] = useState('');
-  const [selectedTopping, setSelectedTopping] = useState('');
+  const [selectedToppings, setSelectedToppings] = useState<string[]>([]);
   const [quantity, setQuantity] = useState<number>(1);
   const [paymentMode, setPaymentMode] = useState<PaymentMode | undefined>(undefined);
 
@@ -275,7 +275,7 @@ export default function CashierDashboard({ user, onLogout, onNavigateToAnalytics
         setMapSelectedName(menu.bases[0].name);
       }
       if (menu.pizzas.length > 0) setSelectedType(menu.pizzas[0].id);
-      if (menu.toppings.length > 0) setSelectedTopping(menu.toppings[0].id);
+      if (menu.toppings.length > 0) setSelectedToppings([menu.toppings[0].id]);
 
       await loadOrderHistory();
       await loadInventoryData();
@@ -402,10 +402,17 @@ export default function CashierDashboard({ user, onLogout, onNavigateToAnalytics
   // Current selected item details
   const currentBase = bases.find(b => b.id === selectedBase) || bases[0];
   const currentType = pizzas.find(t => t.id === selectedType) || pizzas[0];
-  const currentTopping = toppings.find(p => p.id === selectedTopping) || toppings[0];
+  const selectedToppingObjects = toppings.filter(p => selectedToppings.includes(p.id));
+  const currentToppingsName = selectedToppingObjects.length > 0
+    ? selectedToppingObjects.map(p => p.name).join(', ')
+    : 'No Extra Topping';
+  const currentToppingsPrice = selectedToppingObjects.reduce((sum, p) => sum + p.price, 0);
+  const currentToppingsId = selectedToppingObjects.length > 0
+    ? selectedToppingObjects.map(p => p.id).join(',')
+    : 'none';
 
   const totalSubtotal = isCartEmpty
-    ? (currentBase && currentType && currentTopping ? (currentBase.price + currentType.price + currentTopping.price) * quantity : 0)
+    ? (currentBase && currentType ? (currentBase.price + currentType.price + currentToppingsPrice) * quantity : 0)
     : cashierCartItems.reduce((sum, item) => sum + ((item.basePrice + item.pizzaPrice + item.toppingPrice) * item.quantity), 0);
 
   const hasDiscount = totalQuantity >= 5;
@@ -415,7 +422,7 @@ export default function CashierDashboard({ user, onLogout, onNavigateToAnalytics
   const finalTotalAmount = postDiscountTotal + gstAmount;
 
   const financials = {
-    unitPrice: isCartEmpty ? (currentBase && currentType && currentTopping ? currentBase.price + currentType.price + currentTopping.price : 0) : 0,
+    unitPrice: isCartEmpty ? (currentBase && currentType ? currentBase.price + currentType.price + currentToppingsPrice : 0) : 0,
     subtotal: totalSubtotal,
     discount: discountAmount,
     postDiscountTotal,
@@ -474,7 +481,7 @@ export default function CashierDashboard({ user, onLogout, onNavigateToAnalytics
             p => p.name.toLowerCase().includes(extracted.topping_name.toLowerCase()) ||
                  extracted.topping_name.toLowerCase().includes(p.name.toLowerCase())
           );
-          if (matchedTopping) setSelectedTopping(matchedTopping.id);
+          if (matchedTopping) setSelectedToppings([matchedTopping.id]);
         }
 
         // Match Payment
@@ -514,7 +521,7 @@ export default function CashierDashboard({ user, onLogout, onNavigateToAnalytics
       customerPhone,
       baseId: isCartEmpty ? selectedBase : cashierCartItems[0].baseId,
       typeId: isCartEmpty ? selectedType : cashierCartItems[0].typeId,
-      toppingId: isCartEmpty ? selectedTopping : cashierCartItems[0].toppingId,
+      toppingId: isCartEmpty ? currentToppingsId : cashierCartItems[0].toppingId,
       quantity: totalQuantity,
       paymentMode,
     };
@@ -551,7 +558,7 @@ export default function CashierDashboard({ user, onLogout, onNavigateToAnalytics
       customerPhone,
       baseId: isCartEmpty ? selectedBase : cashierCartItems[0].baseId,
       typeId: isCartEmpty ? selectedType : cashierCartItems[0].typeId,
-      toppingId: isCartEmpty ? selectedTopping : cashierCartItems[0].toppingId,
+      toppingId: isCartEmpty ? currentToppingsId : cashierCartItems[0].toppingId,
       quantity: totalQuantity,
       paymentMode,
       orderSource: 'Counter',
@@ -562,7 +569,7 @@ export default function CashierDashboard({ user, onLogout, onNavigateToAnalytics
       const pizzaDetails = {
         baseName: isCartEmpty ? currentBase.name : cashierCartItems[0].baseName,
         pizzaName: isCartEmpty ? currentType.name : cashierCartItems[0].pizzaName,
-        toppingName: isCartEmpty ? currentTopping.name : cashierCartItems[0].toppingName,
+        toppingName: isCartEmpty ? currentToppingsName : cashierCartItems[0].toppingName,
       };
 
       const result = await submitOrder(inputData, financials, pizzaDetails);
@@ -578,10 +585,10 @@ export default function CashierDashboard({ user, onLogout, onNavigateToAnalytics
           customerPhone: customerPhone.trim(),
           pizzaName: isCartEmpty ? currentType.name : cashierCartItems[0].pizzaName,
           baseName: isCartEmpty ? currentBase.name : cashierCartItems[0].baseName,
-          toppingName: isCartEmpty ? currentTopping.name : cashierCartItems[0].toppingName,
+          toppingName: isCartEmpty ? currentToppingsName : cashierCartItems[0].toppingName,
           pizzaPrice: isCartEmpty ? currentType.price : cashierCartItems[0].pizzaPrice,
           basePrice: isCartEmpty ? currentBase.price : cashierCartItems[0].basePrice,
-          toppingPrice: isCartEmpty ? currentTopping.price : cashierCartItems[0].toppingPrice,
+          toppingPrice: isCartEmpty ? currentToppingsPrice : cashierCartItems[0].toppingPrice,
           quantity: totalQuantity,
           subtotal: financials.subtotal,
           discount: financials.discount,
@@ -1457,18 +1464,45 @@ export default function CashierDashboard({ user, onLogout, onNavigateToAnalytics
                     </select>
                   </div>
 
-                  {/* Topping */}
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-bold text-slate-600 uppercase tracking-wider">3. Add Premium Topping</label>
-                    <select
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none transition"
-                      value={selectedTopping}
-                      onChange={(e) => setSelectedTopping(e.target.value)}
-                    >
-                      {toppings.map(p => (
-                        <option key={p.id} value={p.id}>{p.name} {p.price > 0 ? `(+₹${p.price.toFixed(2)})` : '(Free)'}</option>
-                      ))}
-                    </select>
+                  {/* Toppings (Multi-Select Enabled) */}
+                  <div className="space-y-1.5 col-span-1 sm:col-span-2">
+                    <label className="text-xs font-bold text-slate-600 uppercase tracking-wider block">3. Add Premium Toppings (Multi-Select)</label>
+                    <div className="grid grid-cols-2 gap-2 mt-1 bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+                      {toppings.map((topping) => {
+                        const isChecked = selectedToppings.includes(topping.id);
+                        return (
+                          <label
+                            key={topping.id}
+                            className={`flex items-center gap-2 p-2 rounded-lg border text-xs cursor-pointer select-none transition ${
+                              isChecked
+                                ? 'bg-amber-500/10 border-amber-500/30 text-amber-900 font-semibold'
+                                : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() => {
+                                setSelectedToppings(prev => {
+                                  if (prev.includes(topping.id)) {
+                                    return prev.filter(id => id !== topping.id);
+                                  } else {
+                                    return [...prev, topping.id];
+                                  }
+                                });
+                              }}
+                              className="accent-amber-500 h-3.5 w-3.5 shrink-0 rounded cursor-pointer"
+                            />
+                            <div className="flex justify-between items-center w-full min-w-0">
+                              <span className="truncate">{topping.name}</span>
+                              <span className="text-[10px] text-slate-500 font-mono shrink-0 ml-1">
+                                {topping.price > 0 ? `+₹${topping.price.toFixed(2)}` : 'Free'}
+                              </span>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
                   </div>
 
                   {/* Quantity */}
@@ -1512,13 +1546,12 @@ export default function CashierDashboard({ user, onLogout, onNavigateToAnalytics
                       onClick={() => {
                         const base = bases.find(b => b.id === selectedBase) || bases[0];
                         const type = pizzas.find(t => t.id === selectedType) || pizzas[0];
-                        const topping = toppings.find(p => p.id === selectedTopping) || toppings[0];
-                        if (!base || !type || !topping) return;
+                        if (!base || !type) return;
 
                         const existingIdx = cashierCartItems.findIndex(item => 
                           item.baseId === selectedBase && 
                           item.typeId === selectedType && 
-                          item.toppingId === selectedTopping
+                          item.toppingId === currentToppingsId
                         );
 
                         if (existingIdx > -1) {
@@ -1538,9 +1571,9 @@ export default function CashierDashboard({ user, onLogout, onNavigateToAnalytics
                             typeId: selectedType,
                             pizzaName: type.name,
                             pizzaPrice: type.price,
-                            toppingId: selectedTopping,
-                            toppingName: topping.name,
-                            toppingPrice: topping.price,
+                            toppingId: currentToppingsId,
+                            toppingName: currentToppingsName,
+                            toppingPrice: currentToppingsPrice,
                             quantity
                           }]);
                         }
@@ -1577,7 +1610,7 @@ export default function CashierDashboard({ user, onLogout, onNavigateToAnalytics
                     <div className="border-b border-slate-100 pb-2.5">
                       <p className="text-xs text-slate-400 font-mono font-bold uppercase">Item Description (Preview)</p>
                       <p className="font-semibold text-slate-800 text-sm mt-1">{currentType?.name}</p>
-                      <p className="text-slate-500 text-[11px] mt-0.5">Crust: {currentBase?.name} | Topping: {currentTopping?.name}</p>
+                      <p className="text-slate-500 text-[11px] mt-0.5">Crust: {currentBase?.name} | Toppings: {currentToppingsName}</p>
                     </div>
 
                     <div className="flex justify-between text-slate-500">
@@ -1589,8 +1622,8 @@ export default function CashierDashboard({ user, onLogout, onNavigateToAnalytics
                       <span>₹{(currentType?.price || 0).toFixed(2)}</span>
                     </div>
                     <div className="flex justify-between text-slate-500">
-                      <span>Premium Topping</span>
-                      <span>+₹{(currentTopping?.price || 0).toFixed(2)}</span>
+                      <span>Premium Toppings</span>
+                      <span>+₹{currentToppingsPrice.toFixed(2)}</span>
                     </div>
                     <div className="flex justify-between font-bold text-slate-700 border-t border-slate-100 pt-2 font-mono text-[11px]">
                       <span>Unit Cost</span>

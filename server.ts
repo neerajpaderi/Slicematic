@@ -163,6 +163,161 @@ app.post('/api/parse-order', async (req: Request, res: Response): Promise<void> 
 });
 
 /**
+ * API Endpoint: Chatbot ordering assistant using OpenRouter and fallback to Gemini
+ */
+app.post('/api/chat-order', async (req: Request, res: Response): Promise<void> => {
+  const { messages, cart, customerName, customerPhone, paymentMode } = req.body;
+
+  if (!messages || !Array.isArray(messages)) {
+    res.status(400).json({ error: 'Please provide a valid "messages" array.' });
+    return;
+  }
+
+  const currentCartDesc = cart && Array.isArray(cart) && cart.length > 0
+    ? cart.map((item: any) => `${item.quantity}x ${item.pizzaName} on ${item.baseName} crust (Toppings: ${item.toppingName})`).join(', ')
+    : 'Empty';
+
+  const systemPrompt = `You are a warm, polite, and efficient AI ordering assistant for SliceMatic pizzeria (dine-in / self-order).
+Your task is to conversationalize with the customer, guide them through our mandatory ordering steps, and output a strict JSON format containing both your natural conversation response ("reply") and any extracted fields.
+
+MANDATORY WORKFLOW STEPS:
+1. **Pizza Selection**: If the cart is empty and the user hasn't specified what pizza they want, ask them what pizza they would like. Guide them through choosing a pizza flavor (e.g. Margherita, Double Pepperoni, Veggie), crust base (Thin Crust, Cheese Burst, Pan), and extra premium toppings.
+   - If they specify a pizza details, extract "pizza_name", "base_name", "topping_name", and "quantity". The frontend will automatically add this item to the cart!
+2. **Contact Details (MANDATORY)**: Once there are items in the cart (or if the user has just selected a pizza), you MUST get the customer's name and 10-digit mobile number. If they are not already provided (check Current State below), ask for them. Do not skip this; getting Name and Mobile Number is mandatory.
+3. **Payment Method (MANDATORY)**: Once there is at least one item in the cart AND we have their name and mobile number, you MUST ask for their preferred payment method. The only supported methods are "Cash", "Card", or "UPI". This is mandatory.
+4. **Order Confirmation & Placement**: Once we have items in the cart, name, phone, and payment method:
+   - Present a complete summary of the order to the customer.
+   - Set "order_action" to "submit_order" so the frontend can automatically place and submit the order in the database, pop up the dine-in order confirmation, and dispatch the digital receipt SMS!
+
+CURRENT STATE:
+- Items in Cart: ${currentCartDesc}
+- Customer Name: ${customerName || 'None'}
+- Customer Phone: ${customerPhone || 'None'}
+- Payment Mode: ${paymentMode || 'None'}
+
+Please inspect the conversation and the Current State above. If a value is already provided in the Current State, do not ask for it again; instead, proceed to the next missing mandatory field!
+
+Your output must be a strict JSON object with EXACTLY this structure (no markdown formatting, no backticks, no text outside the JSON):
+{
+  "reply": "Write your friendly conversational reply here, guiding the user to the next step or confirming details.",
+  "customer_name": "string (the extracted name, or keep the existing one if present) or null",
+  "customer_phone": "string (the extracted 10-digit mobile number, or keep existing) or null",
+  "quantity": "integer (extracted quantity of the new pizza item being added) or null",
+  "base_name": "string (extracted base crust: e.g. Thin Crust, Cheese Burst, Pan) or null",
+  "pizza_name": "string (extracted pizza flavor name: e.g. Margherita, Pepperoni) or null",
+  "topping_name": "string (extracted premium toppings) or null",
+  "payment_mode": "Cash" | "Card" | "UPI" or null (keep existing if present)",
+  "order_action": "add_to_cart" | "submit_order" | "none"
+}
+
+CRITICAL:
+- If you are extracting a pizza to add to the cart, set "order_action" to "add_to_cart".
+- If the cart is not empty, name and phone are filled, and the user has chosen their payment mode, set "order_action" to "submit_order" so the system can automatically place and complete the order.
+- Otherwise, set "order_action" to "none".`;
+
+  const openRouterKey = process.env.OPENROUTER_API_KEY;
+
+  if (openRouterKey && openRouterKey !== 'MY_OPENROUTER_API_KEY' && openRouterKey.trim() !== '') {
+    try {
+      console.log('Attempting to process chatbot order using OpenRouter...');
+      
+      const formattedMessages = [
+        { role: 'system', content: systemPrompt },
+        ...messages.map((m: any) => ({
+          role: m.role === 'user' ? 'user' : 'assistant',
+          content: m.content
+        }))
+      ];
+
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${openRouterKey}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': process.env.APP_URL || 'http://localhost:3000',
+          'X-Title': 'SliceMatic Pizza Order Chatbot',
+        },
+        body: JSON.stringify({
+          model: 'google/gemini-2.5-flash',
+          messages: formattedMessages,
+          temperature: 0.1,
+          response_format: { type: 'json_object' }
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`OpenRouter returned status code ${response.status}`);
+      }
+
+      const data = await response.json();
+      const rawText = data.choices?.[0]?.message?.content?.trim();
+
+      if (!rawText) {
+        throw new Error('OpenRouter response did not contain content.');
+      }
+
+      let parsedData = null;
+      try {
+        parsedData = JSON.parse(rawText);
+      } catch (pe) {
+        // Not a JSON block
+      }
+
+      res.json({
+        success: true,
+        source: 'openrouter',
+        text: parsedData?.reply || rawText,
+        data: parsedData,
+      });
+      return;
+    } catch (openRouterError: any) {
+      console.warn('OpenRouter chatbot failed, attempting Gemini fallback:', openRouterError.message);
+    }
+  }
+
+  if (aiClient) {
+    try {
+      console.log('Chatbot ordering using fallback Google Gemini client...');
+      
+      const lastMessage = messages[messages.length - 1]?.content || '';
+      
+      const response = await aiClient.models.generateContent({
+        model: 'gemini-3.5-flash',
+        contents: `Previous messages context: ${JSON.stringify(messages)}\n\nLast user message: ${lastMessage}`,
+        config: {
+          systemInstruction: systemPrompt,
+          temperature: 0.1,
+          responseMimeType: 'application/json',
+        },
+      });
+
+      const rawText = response.text?.trim() || '';
+      let parsedData = null;
+      try {
+        parsedData = JSON.parse(rawText);
+      } catch (pe) {
+        // Not a JSON block
+      }
+
+      res.json({
+        success: true,
+        source: 'gemini_fallback',
+        text: parsedData?.reply || rawText,
+        data: parsedData,
+      });
+      return;
+    } catch (geminiError: any) {
+      console.error('Gemini chatbot fallback failed:', geminiError);
+    }
+  }
+
+  res.status(500).json({
+    success: false,
+    error: 'Failed to process chat order request. Ensure OPENROUTER_API_KEY or GEMINI_API_KEY is configured.',
+  });
+});
+
+/**
  * API Endpoint: Translate natural language questions about business performance into SQL,
  * providing a detailed explanation and simulated database execution rows matching the schema.
  */
