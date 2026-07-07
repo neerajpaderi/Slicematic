@@ -8,7 +8,7 @@ import { getSupabaseClient } from './supabaseClient';
 export interface StaffUser {
   id?: number;
   username: string;
-  role: 'cashier' | 'admin';
+  role: 'cashier' | 'admin' | 'kitchen';
   created_at?: string;
 }
 
@@ -16,7 +16,7 @@ export interface StaffUser {
  * Secures authentication against staff_users table in Supabase.
  * Falls back to local memory / storage for simulation mode if Supabase is not connected.
  */
-export async function authenticateStaff(username: string, password: string): Promise<{ success: boolean; role?: 'cashier' | 'admin'; error?: string }> {
+export async function authenticateStaff(username: string, password: string): Promise<{ success: boolean; role?: 'cashier' | 'admin' | 'kitchen'; error?: string }> {
   const supabase = getSupabaseClient();
 
   if (!supabase) {
@@ -29,6 +29,9 @@ export async function authenticateStaff(username: string, password: string): Pro
     }
     if (trimmedUser.toLowerCase() === 'rajan' && trimmedPass === 'rajan123') {
       return { success: true, role: 'admin' };
+    }
+    if (trimmedUser.toLowerCase() === 'chef' && trimmedPass === 'chef123') {
+      return { success: true, role: 'kitchen' };
     }
     
     // Check locally added staff in local storage
@@ -49,7 +52,7 @@ export async function authenticateStaff(username: string, password: string): Pro
 
     return { 
       success: false, 
-      error: 'Incorrect credentials. Simulated options: "Rajan" & "rajan123", or "admin" & "slicematic".' 
+      error: 'Incorrect credentials. Simulated options: "Chef" & "chef123", "Rajan" & "rajan123", or "admin" & "slicematic".' 
     };
   }
 
@@ -114,7 +117,7 @@ export async function authenticateStaff(username: string, password: string): Pro
 
     // 2. Clear password verification
     if (retrievedPassword === password) {
-      return { success: true, role: data.role as 'cashier' | 'admin' };
+      return { success: true, role: data.role as 'cashier' | 'admin' | 'kitchen' };
     } else {
       return { success: false, error: 'Invalid password.' };
     }
@@ -128,7 +131,7 @@ export async function authenticateStaff(username: string, password: string): Pro
  * Writes a new staff user into Supabase table staff_users.
  * Requires admin privileges.
  */
-export async function addStaffUser(username: string, password: string, role: 'cashier' | 'admin'): Promise<{ success: boolean; error?: string }> {
+export async function addStaffUser(username: string, password: string, role: 'cashier' | 'admin' | 'kitchen'): Promise<{ success: boolean; error?: string }> {
   const trimmedUser = username.trim();
   const trimmedPass = password.trim();
 
@@ -216,7 +219,8 @@ export async function getStaffUsers(): Promise<StaffUser[]> {
   if (!supabase) {
     const localDefaults: StaffUser[] = [
       { username: 'Rajan', role: 'admin' },
-      { username: 'admin', role: 'admin' }
+      { username: 'admin', role: 'admin' },
+      { username: 'Chef', role: 'kitchen' }
     ];
     const storedStaffStr = localStorage.getItem('slicematic_simulated_staff');
     if (storedStaffStr) {

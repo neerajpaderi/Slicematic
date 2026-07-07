@@ -1,6 +1,6 @@
 {
   "name": "SliceMatic",
-  "description": "High-contrast pizza ordering and reconciliation system with AI natural language parsing, strict validation rules, and live Supabase database storage.",
+  "description": "High-contrast pizza ordering and reconciliation system with kitchen desk confirmation, live countdown timers, token allocations, AI natural language parsing, and strict validation rules.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

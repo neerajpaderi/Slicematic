@@ -35,7 +35,7 @@ export default function AnalyticsDashboard({ user, onNavigateToCashier }: Analyt
   // Staff registration form states
   const [newUsername, setNewUsername] = useState('');
   const [newPassword, setNewPassword] = useState('');
-  const [newRole, setNewRole] = useState<'cashier' | 'admin'>('cashier');
+  const [newRole, setNewRole] = useState<'cashier' | 'admin' | 'kitchen'>('cashier');
   const [formLoading, setFormLoading] = useState(false);
   const [formAlert, setFormAlert] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
@@ -414,7 +414,7 @@ export default function AnalyticsDashboard({ user, onNavigateToCashier }: Analyt
               <div className="space-y-1.5">
                 <label className="text-xs font-bold text-slate-600 uppercase tracking-wider">Assign Access Level</label>
                 <div className="flex gap-2">
-                  {(['cashier', 'admin'] as const).map((r) => (
+                  {(['cashier', 'admin', 'kitchen'] as const).map((r) => (
                     <button
                       key={r}
                       type="button"

@@ -27,6 +27,7 @@ import { getSupabaseStatus, saveSupabaseConfig, testSupabaseConnection, setServe
 import TableOrdering from './components/TableOrdering';
 import CashierDashboard from './components/CashierDashboard';
 import AnalyticsDashboard from './components/AnalyticsDashboard';
+import KitchenDashboard from './components/KitchenDashboard';
 
 export default function App() {
   // Client-side router states
@@ -34,7 +35,7 @@ export default function App() {
 
   // Authentication states
   const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [currentUser, setCurrentUser] = useState<{ username: string; role: 'cashier' | 'admin' } | null>(null);
+  const [currentUser, setCurrentUser] = useState<{ username: string; role: 'cashier' | 'admin' | 'kitchen' } | null>(null);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState('');
@@ -154,8 +155,12 @@ export default function App() {
         localStorage.setItem('slicematic_logged_in', 'true');
         localStorage.setItem('slicematic_logged_user', JSON.stringify(staffObj));
 
-        // Redirect to cashier route upon successful auth
-        navigateTo('/cashier');
+        // Redirect to appropriate route upon successful auth
+        if (result.role === 'kitchen') {
+          navigateTo('/kitchen');
+        } else {
+          navigateTo('/cashier');
+        }
         
         // Reset login forms
         setUsername('');
@@ -239,8 +244,19 @@ export default function App() {
       }
       
       // Validate roles 'cashier' or 'admin'
-      if (currentUser.role !== 'cashier' && currentUser.role !== 'admin') {
+      if (currentUser.role !== 'cashier' && currentUser.role !== 'admin' && currentUser.role !== 'kitchen') {
         return renderLoginScreen('Unauthorized access levels.');
+      }
+
+      // If user is kitchen staff, redirect them to kitchen
+      if (currentUser.role === 'kitchen') {
+        setTimeout(() => navigateTo('/kitchen'), 100);
+        return (
+          <div className="min-h-screen flex items-center justify-center bg-slate-900 text-white p-6">
+            <RefreshCw className="h-6 w-6 animate-spin text-amber-500" />
+            <span className="ml-3 font-mono text-sm">Redirecting kitchen staff to /kitchen...</span>
+          </div>
+        );
       }
 
       return (
@@ -248,6 +264,7 @@ export default function App() {
           user={currentUser} 
           onLogout={handleLogout} 
           onNavigateToAnalytics={() => navigateTo('/analytics')} 
+          onNavigateToKitchen={() => navigateTo('/kitchen')}
         />
       );
     }
@@ -273,6 +290,25 @@ export default function App() {
       return (
         <AnalyticsDashboard 
           user={currentUser} 
+          onNavigateToCashier={() => navigateTo('/cashier')} 
+        />
+      );
+    }
+
+    // 3.5 Kitchen Dashboard: matches /kitchen
+    if (path === '/kitchen') {
+      if (!isLoggedIn || !currentUser) {
+        return renderLoginScreen('Kitchen Terminal Access Required');
+      }
+
+      if (currentUser.role !== 'kitchen' && currentUser.role !== 'admin' && currentUser.role !== 'cashier') {
+        return renderLoginScreen('Unauthorized access levels.');
+      }
+
+      return (
+        <KitchenDashboard 
+          user={currentUser} 
+          onLogout={handleLogout} 
           onNavigateToCashier={() => navigateTo('/cashier')} 
         />
       );
@@ -442,6 +478,7 @@ export default function App() {
             <p className="text-[10px] text-slate-500">Quick fill demo staff accounts:</p>
             <div className="flex gap-2 justify-center mt-2.5">
               <button
+                type="button"
                 onClick={() => {
                   setUsername('Rajan');
                   setPassword('rajan123');
@@ -451,6 +488,17 @@ export default function App() {
                 Rajan (Admin)
               </button>
               <button
+                type="button"
+                onClick={() => {
+                  setUsername('Chef');
+                  setPassword('chef123');
+                }}
+                className="bg-slate-850 hover:bg-amber-950/40 text-slate-400 hover:text-amber-400 px-2.5 py-1.5 rounded-lg text-[10px] border border-slate-800 font-mono cursor-pointer transition"
+              >
+                Chef (Kitchen)
+              </button>
+              <button
+                type="button"
                 onClick={() => {
                   setUsername('admin');
                   setPassword('slicematic');

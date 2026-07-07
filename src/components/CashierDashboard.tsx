@@ -30,12 +30,14 @@ import {
   Settings,
   History,
   Wrench,
-  Activity
+  Activity,
+  Clock
 } from 'lucide-react';
 import { getActiveMenuItems, parseMenuTextFile, updateMenuFromParsedItems } from '../lib/menuService';
 import { validatePizzaOrder, calculateFinancials, runPizzaUnitTests } from '../lib/pizzaValidation';
 import { getSupabaseStatus, getSupabaseClient } from '../lib/supabaseClient';
 import { submitOrder, getOrdersHistory, clearOrdersHistory, fetchSupabaseOrders } from '../lib/orderService';
+import { getKitchenStateForOrder } from '../lib/kitchenService';
 import { PizzaBase, PizzaType, PizzaTopping, ValidationError, PaymentMode, UnitTestResult } from '../types';
 import { 
   getInventory, 
@@ -51,13 +53,102 @@ import {
   InventoryTransaction
 } from '../lib/inventoryService';
 
-interface CashierDashboardProps {
-  user: { username: string; role: 'cashier' | 'admin' };
-  onLogout: () => void;
-  onNavigateToAnalytics: () => void;
+// Self-contained component to render live kitchen status, token and countdown timer in cashier view
+function KitchenStatusCell({ orderId }: { orderId: string }) {
+  const [kitchenState, setKitchenState] = useState<any>(null);
+  const [timeLeft, setTimeLeft] = useState<string>('5:00');
+  const [isOvertime, setIsOvertime] = useState<boolean>(false);
+
+  useEffect(() => {
+    const updateState = () => {
+      const state = getKitchenStateForOrder(orderId);
+      setKitchenState(state);
+
+      if (state.approved && state.approvedAt && state.status === 'Preparing') {
+        const approvedTime = new Date(state.approvedAt).getTime();
+        const fiveMinutesInMs = 5 * 60 * 1000;
+        const targetTime = approvedTime + fiveMinutesInMs;
+        const now = Date.now();
+        const diff = targetTime - now;
+
+        if (diff <= 0) {
+          setIsOvertime(true);
+          const positiveDiff = Math.abs(diff);
+          const mins = Math.floor(positiveDiff / 60000);
+          const secs = Math.floor((positiveDiff % 60000) / 1000);
+          setTimeLeft(`+${mins}:${secs < 10 ? '0' : ''}${secs}`);
+        } else {
+          setIsOvertime(false);
+          const mins = Math.floor(diff / 60000);
+          const secs = Math.floor((diff % 60000) / 1000);
+          setTimeLeft(`${mins}:${secs < 10 ? '0' : ''}${secs}`);
+        }
+      }
+    };
+
+    updateState();
+    const interval = setInterval(updateState, 1000);
+
+    // Also listen to storage events to refresh immediately when approved in the other frame
+    window.addEventListener('storage', updateState);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('storage', updateState);
+    };
+  }, [orderId]);
+
+  if (!kitchenState) {
+    return <span className="text-slate-400 font-mono text-[10px]">Loading...</span>;
+  }
+
+  if (kitchenState.status === 'Pending') {
+    return (
+      <span className="inline-flex items-center gap-1 bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded text-[10px] font-bold">
+        Pending Approval
+      </span>
+    );
+  }
+
+  if (kitchenState.status === 'Preparing') {
+    return (
+      <div className="flex flex-col gap-0.5">
+        <span className="inline-flex items-center gap-1 bg-indigo-50 text-indigo-700 border border-indigo-100 px-2 py-0.5 rounded text-[10px] font-bold w-max">
+          Cooking ({kitchenState.tokenNumber})
+        </span>
+        <span className={`inline-flex items-center gap-1 text-[10px] font-mono font-bold mt-0.5 ${
+          isOvertime ? 'text-rose-600 animate-pulse' : 'text-amber-600'
+        }`}>
+          <Clock className="h-3 w-3 shrink-0" />
+          <span>Timer: {timeLeft}</span>
+        </span>
+      </div>
+    );
+  }
+
+  if (kitchenState.status === 'Ready') {
+    return (
+      <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded text-[10px] font-bold">
+        Ready ({kitchenState.tokenNumber})
+      </span>
+    );
+  }
+
+  return (
+    <span className="inline-flex items-center gap-1 bg-slate-100 text-slate-500 border border-slate-200 px-2 py-0.5 rounded text-[10px] font-medium">
+      Completed ({kitchenState.tokenNumber})
+    </span>
+  );
 }
 
-export default function CashierDashboard({ user, onLogout, onNavigateToAnalytics }: CashierDashboardProps) {
+interface CashierDashboardProps {
+  user: { username: string; role: 'cashier' | 'admin' | 'kitchen' };
+  onLogout: () => void;
+  onNavigateToAnalytics: () => void;
+  onNavigateToKitchen: () => void;
+}
+
+export default function CashierDashboard({ user, onLogout, onNavigateToAnalytics, onNavigateToKitchen }: CashierDashboardProps) {
   // Menu options (loaded dynamically from database)
   const [bases, setBases] = useState<PizzaBase[]>([]);
   const [pizzas, setPizzas] = useState<PizzaType[]>([]);
@@ -601,6 +692,13 @@ export default function CashierDashboard({ user, onLogout, onNavigateToAnalytics
         </div>
 
         <div className="flex gap-2">
+          <button
+            onClick={onNavigateToKitchen}
+            className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs py-2 px-4 rounded-xl shadow transition flex items-center gap-1.5 cursor-pointer"
+          >
+            <Activity className="h-3.5 w-3.5" />
+            <span>Kitchen Desk</span>
+          </button>
           {user.role === 'admin' && (
             <button
               onClick={onNavigateToAnalytics}
@@ -1771,6 +1869,7 @@ export default function CashierDashboard({ user, onLogout, onNavigateToAnalytics
                   <th className="p-3">Subtotal</th>
                   <th className="p-3">GST Tax</th>
                   <th className="p-3">Payable</th>
+                  <th className="p-3">Kitchen Status / Token</th>
                   <th className="p-3">Payment</th>
                 </tr>
               </thead>
@@ -1784,6 +1883,9 @@ export default function CashierDashboard({ user, onLogout, onNavigateToAnalytics
                     <td className="p-3 font-mono">₹{parseFloat(order.subtotal || 0).toFixed(2)}</td>
                     <td className="p-3 font-mono">₹{parseFloat(order.gst || 0).toFixed(2)}</td>
                     <td className="p-3 font-mono font-bold text-emerald-700">₹{parseFloat(order.final_total || 0).toFixed(2)}</td>
+                    <td className="p-3">
+                      <KitchenStatusCell orderId={order.id} />
+                    </td>
                     <td className="p-3">
                       <span className="px-2 py-0.5 rounded font-bold text-[10px] bg-slate-100 border border-slate-200">
                         {order.payment_mode}
